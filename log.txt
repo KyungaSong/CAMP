@@ -1,0 +1,3 @@
+2024-04-18 12:18:28,169:INFO:Number of users: 256*256, Number of interactions: 626524, Dataset preparation time: 2623.804535150528 seconds, DataLoader loading time: 2665.558624982834 seconds, Training time: 5832.759240865707 seconds
+2024-04-19 01:45:39,070:INFO:Number of users: 65536, Number of interactions: 622916, Dataset preparation time: 2556.1535246372223 seconds, DataLoader loading time: 2634.0067689418793 seconds, Training time: 3822.29110956192 seconds
+
