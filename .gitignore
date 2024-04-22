@@ -1,4 +1,7 @@
+log.txt
+data_sampling.py
 test.py
+
 dataset/*
 __pycache__/
 .vscode/

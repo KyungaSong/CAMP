@@ -1,3 +1,10 @@
-2024-04-18 12:18:28,169:INFO:Number of users: 256*256, Number of interactions: 626524, Dataset preparation time: 2623.804535150528 seconds, DataLoader loading time: 2665.558624982834 seconds, Training time: 5832.759240865707 seconds
+2024-04-18 12:18:28,169:INFO:Number of users: 65536, Number of interactions: 626524, Dataset preparation time: 2623.804535150528 seconds, DataLoader loading time: 2665.558624982834 seconds, Training time: 5832.759240865707 seconds
 2024-04-19 01:45:39,070:INFO:Number of users: 65536, Number of interactions: 622916, Dataset preparation time: 2556.1535246372223 seconds, DataLoader loading time: 2634.0067689418793 seconds, Training time: 3822.29110956192 seconds
+2024-04-19 16:01:53,300:INFO:Number of users: 1024, Number of interactions: 9991, Dataset preparation time: 3.8410861492156982 seconds, DataLoader loading time: 3.947629690170288 seconds, Training time: 44.71144676208496 seconds
+
+2024-04-21 09:42:10,055:INFO:Number of users: 65536, Number of interactions: 620994, Dataset preparation time: 2298.409748315811 seconds, DataLoader loading time: 2303.987496614456 seconds, Training time: 2769.654937982559 seconds
+
+2024-04-21 13:46:28,153:INFO:Number of users: 131072, Number of interactions: 1245827, Dataset preparation time: 7640.897214174271 seconds, DataLoader loading time: 7653.644214630127 seconds, Training time: 6131.003789901733 seconds
+
+2024-04-22 04:04:15,186:INFO:Number of users: 262144, Number of interactions: 2494128, Dataset preparation time: 18268.58352136612 seconds, DataLoader loading time: 18297.212606430054 seconds, Training time: 14198.494511604309 seconds
 

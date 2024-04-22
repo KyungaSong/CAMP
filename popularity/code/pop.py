@@ -5,13 +5,11 @@ import json
 
 def load_dataset(file_path, side = False):    
     if side:
-        # with gzip.open(file_path, 'rb') as g:
-        #     df= pd.DataFrame([eval(line.decode('utf-8')) for line in g])
         with gzip.open(file_path, 'rt', encoding='utf-8') as gz:
             data = [json.loads(line) for line in gz]
         df = pd.DataFrame(data)
-        necessary_columns = {'main_category': 'genre', 'average_rating': 'avg_rating', 'store': 'director', 'parent_asin': 'item_id'}
-        df = df[list(necessary_columns.keys())].rename(columns=necessary_columns)
+        necessary_columns = ['main_category', 'average_rating', 'rating_number', 'store', 'parent_asin']
+        df = df[necessary_columns].rename(columns={'main_category': 'category', 'average_rating': 'avg_rating', 'parent_asin': 'item_id'})
     else:
         df = pd.read_csv(file_path)
         df = df.rename(columns={'parent_asin': 'item_id'})          
@@ -19,13 +17,12 @@ def load_dataset(file_path, side = False):
 
 dataset_name = 'sampled_Home_and_Kitchen'
 df = load_dataset(f'../../dataset/{dataset_name}/{dataset_name}.csv')
+print("df\n", df.head())
 item_encoder = LabelEncoder().fit(df['item_id'])
 num_items = df['item_id'].nunique()
 dataset_name = 'Home_and_Kitchen'
 df_side = load_dataset(f'../../dataset/{dataset_name}/meta_{dataset_name}.jsonl.gz', side = True)
 filtered_df_side = pd.merge(df[['item_id']], df_side, on='item_id')
-
-print("filtered_df_side\n", filtered_df_side['director'].unique())
 
 time_unit = 1000 * 60 * 60 * 24 # a day
 pop_time_unit = 30 * time_unit # a month
@@ -48,10 +45,9 @@ def preprocess_df(df, pop_time_unit, df_side):
 
     df_side['item_encoded'] = item_encoder.transform(df_side['item_id']) + 1
 
+    return df_pop, df_side
 
-    return df_pop
-
-df_fianl = preprocess_df(df, pop_time_unit, df_side)
-
+df_pop, df_side = preprocess_df(df, pop_time_unit, filtered_df_side)
+print("df_pop\n", df_pop,  "\ndf_side:\n", df_side)
 
 # side_info 구하기 

@@ -17,7 +17,7 @@ unique_user_ids = df_filtered['user_id'].unique()
 print("Unique user_id count:", len(unique_user_ids))
 
 # sampled_user_ids = np.random.choice(unique_user_ids, size=int(len(unique_user_ids) * 0.05), replace=False)
-sampled_user_ids = np.random.choice(unique_user_ids, size= 512 * 256, replace=False)
+sampled_user_ids = np.random.choice(unique_user_ids, size= 2**18, replace=False)
 
 df_final = df_filtered[df_filtered['user_id'].isin(sampled_user_ids)]
 
