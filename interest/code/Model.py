@@ -225,6 +225,7 @@ class InterestFusionModule(nn.Module):
         # Final interest representation
         z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
         # Predict the likelihood of selecting an item
+        item_embedding = item_embedding.squeeze(0)
         y_int = self.mlp_pred(torch.cat((z_t, item_embedding), dim=1))
 
         return y_int
@@ -245,46 +246,44 @@ class BCELossModule(nn.Module):
 class CAMP(nn.Module):
     def __init__(self, num_users, num_items, embedding_dim, hidden_dim, output_dim):
         super(CAMP, self).__init__()
-
-        # Embedding layers
         self.user_embedding = nn.Embedding(num_users, embedding_dim)
         self.item_embedding = nn.Embedding(num_items + 1, embedding_dim, padding_idx=0)
-        
-        # Interest modules
         self.long_term_module = LongTermInterestModule(embedding_dim)
         self.mid_term_module = MidTermInterestModule(embedding_dim, hidden_dim)
         self.short_term_module = ShortTermInterestModule(embedding_dim, hidden_dim)
-        
-        # Interest fusion and BCE loss
         self.interest_fusion_module = InterestFusionModule(embedding_dim, hidden_dim, output_dim)
         self.bce_loss_module = BCELossModule()
 
-    def forward(self, user_ids, item_ids, history_items_padded, mid_lens, short_lens, neg_item_ids):
-        # Embed user, item, and negative item IDs
+    def forward(self, batch):
+        user_ids = batch['user']
+        item_ids = batch['item']
+        history_items_padded = batch['history']
+        mid_lens = batch['mid_len']
+        short_lens = batch['short_len']
+        neg_item_ids = batch['neg_items']
+        
         user_embeds = self.user_embedding(user_ids)
         item_embeds = self.item_embedding(item_ids)
         history_embeds = self.item_embedding(history_items_padded)
-        neg_item_embeds = self.item_embedding(neg_item_ids)       
+        neg_item_embeds = self.item_embedding(neg_item_ids)
 
-        # Interest calculations using embedded history
         z_l = self.long_term_module(history_embeds, user_embeds)
         z_m = self.mid_term_module(history_embeds, user_embeds)
         z_s = self.short_term_module(history_embeds, user_embeds)
 
-        # Interest proxies and contrastive loss calculation
         p_l = long_term_interest_proxy(history_embeds)
-        p_m = mid_term_interest_proxy(history_embeds, mid_lens)        
+        p_m = mid_term_interest_proxy(history_embeds, mid_lens)
         p_s = short_term_interest_proxy(history_embeds, short_lens)
         loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s)
 
-        # Final interest representation and predictions
-        y_int_pos = self.interest_fusion_module(history_embeds, mid_lens, z_l, z_m, z_s, item_embeds)
-        y_int_neg = self.interest_fusion_module(history_embeds, mid_lens, z_l, z_m, z_s, neg_item_embeds)
+        y_int_pos = self.interest_fusion_module(history_embeds, mid_lens, z_l, z_m, z_s, item_embeds)        
+        y_int_negs = torch.stack([
+            self.interest_fusion_module(history_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1))
+            for neg_embed in neg_item_embeds.split(1, dim=1)
+        ], dim=1).squeeze(2)
+        loss_bce_pos = self.bce_loss_module(y_int_pos, torch.ones_like(y_int_pos))
+        loss_bce_neg = self.bce_loss_module(y_int_negs, torch.zeros_like(y_int_negs))
+        loss_bce = loss_bce_pos + loss_bce_neg
 
-        # BCE Loss calculation
-        loss_bce = self.bce_loss_module(y_int_pos, torch.ones_like(y_int_pos)) + \
-                   self.bce_loss_module(y_int_neg, torch.zeros_like(y_int_neg))
-
-        # Total loss
         loss = loss_con + loss_bce
-        return loss, y_int_pos, y_int_neg
+        return loss, y_int_pos, y_int_negs

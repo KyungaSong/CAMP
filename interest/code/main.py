@@ -36,29 +36,50 @@ logging.basicConfig(filename='../../log.txt', level=logging.DEBUG, format='%(asc
 dataset_name = 'sampled_Home_and_Kitchen'
 processed_path = f'../../dataset/preprocessed/{dataset_name}/'
 
-if os.path.exists(f'{processed_path}/train_df.pkl') and os.path.exists(f'{processed_path}/valid_df.pkl') and os.path.exists(f'{processed_path}/test_df.pkl'):
-    print("Processed files already exist. Skipping dataset preparation.")
-else:
-    print("Preraing dataset......")
-    start_time = time.time()
-    df = load_dataset(f'../../dataset/{dataset_name}/{dataset_name}.csv')
-    len_df = len(df)
-    user_encoder = LabelEncoder().fit(df['user_id'])
-    item_encoder = LabelEncoder().fit(df['item_id'])
-    num_users = df['user_id'].nunique()
-    num_items = df['item_id'].nunique()
+# if os.path.exists(f'{processed_path}/train_df.pkl') and os.path.exists(f'{processed_path}/valid_df.pkl') and os.path.exists(f'{processed_path}/test_df.pkl'):
+#     print("Processed files already exist. Skipping dataset preparation.")
+# else:
+#     print("Preraing dataset......")
+#     start_time = time.time()
+#     df = load_dataset(f'../../dataset/{dataset_name}/{dataset_name}.csv')
+#     len_df = len(df)
+#     user_encoder = LabelEncoder().fit(df['user_id'])
+#     item_encoder = LabelEncoder().fit(df['item_id'])
+#     num_users = df['user_id'].nunique()
+#     num_items = df['item_id'].nunique()
 
-    train_df, valid_df, test_df = preprocess_df(df, user_encoder, item_encoder, k_m, k_s, max_length)
+#     train_df, valid_df, test_df = preprocess_df(df, user_encoder, item_encoder, k_m, k_s, max_length)
 
-    if not os.path.exists(processed_path):
-        os.makedirs(processed_path)
-    date_str = datetime.now().strftime('%Y%m%d')
-    train_df.to_pickle(f'{processed_path}/train_df_{date_str}_{num_users}_{len_df}.pkl')
-    valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}_{num_users}_{len_df}.pkl')
-    test_df.to_pickle(f'{processed_path}/test_df_{date_str}_{num_users}_{len_df}.pkl')
-    end_time = time.time()
-    pre_t = end_time - start_time
-    print(f"Dataset prepared in {pre_t:.2f} seconds")
+#     if not os.path.exists(processed_path):
+#         os.makedirs(processed_path)
+#     date_str = datetime.now().strftime('%Y%m%d')
+#     train_df.to_pickle(f'{processed_path}/train_df_{date_str}_{num_users}_{len_df}.pkl')
+#     valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}_{num_users}_{len_df}.pkl')
+#     test_df.to_pickle(f'{processed_path}/test_df_{date_str}_{num_users}_{len_df}.pkl')
+#     end_time = time.time()
+#     pre_t = end_time - start_time
+#     print(f"Dataset prepared in {pre_t:.2f} seconds")
+
+print("Preraing dataset......")
+start_time = time.time()
+df = load_dataset(f'../../dataset/{dataset_name}/{dataset_name}.csv')
+len_df = len(df)
+user_encoder = LabelEncoder().fit(df['user_id'])
+item_encoder = LabelEncoder().fit(df['item_id'])
+num_users = df['user_id'].nunique()
+num_items = df['item_id'].nunique()
+
+train_df, valid_df, test_df = preprocess_df(df, user_encoder, item_encoder, k_m, k_s, max_length)
+
+if not os.path.exists(processed_path):
+    os.makedirs(processed_path)
+date_str = datetime.now().strftime('%Y%m%d')
+train_df.to_pickle(f'{processed_path}/train_df_{date_str}_{num_users}_{len_df}.pkl')
+valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}_{num_users}_{len_df}.pkl')
+test_df.to_pickle(f'{processed_path}/test_df_{date_str}_{num_users}_{len_df}.pkl')
+end_time = time.time()
+pre_t = end_time - start_time
+print(f"Dataset prepared in {pre_t:.2f} seconds")
 
 print("Data Loading......")
 train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
@@ -93,4 +114,4 @@ print(f"Training and Evaluation End in {train_t:.2f} seconds")
 logging.info(f'Number of users: {num_users}, Number of interactions: {len_df}, Dataset preparation time: {pre_t} seconds, DataLoader loading time: {load_t} seconds, Training time: {train_t} seconds')
 
 # Evaluate on test set
-test_loss, test_accuracy = test(model, test_loader, device)
+average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_hit_rate = test(model, test_loader, device)

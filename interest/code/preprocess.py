@@ -28,7 +28,7 @@ def encode_history_items(item_mapping, max_length, history):
     encoded_items = [item_mapping[item] for item in history]
     return [0] * (max_length - len(encoded_items)) + encoded_items
 
-def generate_negative_samples(all_item_ids, positive_item_id, history, num_samples=5):
+def generate_negative_samples(all_item_ids, positive_item_id, history, num_samples=4):
     non_interacted_items = list(all_item_ids - set(history) - {positive_item_id})
     neg_samples = random.sample(non_interacted_items, min(num_samples, len(non_interacted_items)))
     return neg_samples
@@ -58,37 +58,51 @@ def preprocess_df(df, user_encoder, item_encoder, k_m, k_s, max_length):
     test_df = df.groupby('user_id').apply(lambda x: x.iloc[-1:], include_groups=False).reset_index(drop=True)       
          
     # Generating negative samples for validation and test datasets
-    valid_df['neg_items'] = valid_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['history_encoded'], num_samples=5), axis=1)
-    test_df['neg_items'] = test_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['history_encoded'], num_samples=5), axis=1)
+    train_df['neg_items'] = train_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['history_encoded'], num_samples=4), axis=1)
+    valid_df['neg_items'] = valid_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['history_encoded'], num_samples=4), axis=1)
+    test_df['neg_items'] = test_df.apply(lambda x: generate_negative_samples(all_item_ids, None, x['history_encoded'], num_samples=49), axis=1)
     
     return train_df, valid_df, test_df
 
 class MakeDataset(Dataset):
-    def __init__(self, users, items, histories, mid_lens, short_lens, neg_items):
+    def __init__(self, users, items, histories, mid_lens, short_lens, neg_items=None):
         self.users = torch.tensor(users, dtype=torch.long)
         self.items = torch.tensor(items, dtype=torch.long)
         self.histories = [torch.tensor(h, dtype=torch.long) for h in histories]
         self.mid_lens = torch.tensor(mid_lens, dtype=torch.int)
         self.short_lens = torch.tensor(short_lens, dtype=torch.int)
-        self.neg_items = torch.tensor(neg_items, dtype=torch.long)
-    
+        # Only initialize neg_items if provided
+        if neg_items is not None:
+            self.neg_items = [torch.tensor(n, dtype=torch.long) for n in neg_items]
+        else:
+            self.neg_items = None
+
     def __len__(self):
         return len(self.users)
     
     def __getitem__(self, idx):
-        return self.users[idx], self.items[idx], self.histories[idx], self.mid_lens[idx], self.short_lens[idx],self.neg_items[idx]
+        data = {
+            'user': self.users[idx],
+            'item': self.items[idx],
+            'history': self.histories[idx],
+            'mid_len': self.mid_lens[idx],
+            'short_len': self.short_lens[idx]
+        }
+        if self.neg_items is not None:
+            data['neg_items'] = self.neg_items[idx]
+        return data
 
 def create_datasets(train_df, valid_df, test_df):
     train_dataset = MakeDataset(
         train_df['user_encoded'], train_df['item_encoded'], train_df['history_encoded'],
-        train_df['mid_len'], train_df['short_len'], train_df['neg_item']
+        train_df['mid_len'], train_df['short_len'], train_df['neg_items']
     )
     valid_dataset = MakeDataset(
         valid_df['user_encoded'], valid_df['item_encoded'], valid_df['history_encoded'],
-        valid_df['mid_len'], valid_df['short_len'], valid_df['neg_item']
+        valid_df['mid_len'], valid_df['short_len'], valid_df['neg_items']
     )
     test_dataset = MakeDataset(
         test_df['user_encoded'], test_df['item_encoded'], test_df['history_encoded'],
-        test_df['mid_len'], test_df['short_len'], test_df['neg_item']
+        test_df['mid_len'], test_df['short_len'], test_df['neg_items']
     )
     return train_dataset, valid_dataset, test_dataset
