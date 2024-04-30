@@ -7,29 +7,28 @@ torch.manual_seed(2023)
 torch.cuda.manual_seed(2023)
 
 class ModulePopHistory(nn.Module):
-    def __init__(self, config: Config.Config):
+    def __init__(self, config):
         super(ModulePopHistory, self).__init__()
         self.config = config
         self.fc_output_pop_history = nn.Linear(config.embed_size, 1)
 
-    def ema(self, pop_history, valid_pop_len):
+    def ema(self, pop_history_tensor, release_time):
         alpha = self.config.alpha
-        ema_all = []
-        for i in range(len(pop_history)):
-            ema_temp = []
-            line = pop_history[i]
-            for j in range(int(valid_pop_len[i].item())):
-                if j == 0:
-                    ema_temp.append(line[j])
-                else:
-                    ema_temp.append(alpha * line[j] + (1 - alpha) * ema_temp[j - 1])
-            ema_all.append(ema_temp[-1])
-        ema_all = torch.tensor(ema_all).to(self.config.device)
-        return ema_all
+        release_mask = torch.arange(pop_history_tensor.shape[1], device=self.config.device).expand_as(pop_history_tensor) >= release_time.unsqueeze(1)
+        weights = torch.pow(1 - alpha, torch.arange(pop_history_tensor.shape[1], device=self.config.device))
 
-    def forward(self, pop_history, valid_pop_len):
-        history_average = self.ema(pop_history, valid_pop_len)
-        return history_average.unsqueeze(-1)
+        weighted_pops = pop_history_tensor * (alpha * weights)
+        cumulative_pops = torch.cumsum(weighted_pops, dim=1)
+        normalization = torch.cumsum(release_mask * weights, dim=1)
+
+        ema_pops = cumulative_pops / normalization
+        ema_pops[~release_mask] = pop_history_tensor[~release_mask]
+        return ema_pops
+
+    def forward(self, pop_history_tensor, release_time):
+        print(f'history_average:\n{pop_history_tensor}')
+        history_ema = self.ema(pop_history_tensor, release_time)
+        return history_ema.unsqueeze(-1)
 
 
 class ModuleTime(nn.Module):

@@ -5,123 +5,117 @@ import torch.nn.functional as F
 class LongTermInterestModule(nn.Module):
     def __init__(self, embedding_dim):
         super(LongTermInterestModule, self).__init__()
-        self.W_l = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-        self.bn = nn.BatchNorm1d(embedding_dim)  
-        self.dropout = nn.Dropout(0.5)  
+        self.combined_dim = 2 * embedding_dim  
+        self.W_l = nn.Parameter(torch.randn(self.combined_dim, self.combined_dim))
         self.mlp = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
+            nn.Linear(self.combined_dim, self.combined_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(embedding_dim),  
-            nn.Dropout(0.5),                
-            nn.Linear(embedding_dim, 1)
+            nn.Linear(self.combined_dim, 1)
+            
         )
+        self.user_transform = nn.Linear(embedding_dim, 2 * embedding_dim)
     
-    def forward(self, history_embeds, user_embed):
-        h = torch.matmul(history_embeds, self.W_l)
-        h = self.bn(h)  
-        h = self.dropout(h)  
-        user_embed_expanded = user_embed.unsqueeze(1).expand(-1, h.size(1), -1)
+    def forward(self, item_his_embeds, cat_his_embeds, user_embed):        
+        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)        
+        h = torch.matmul(combined_embeds, self.W_l) 
+        user_embed_transformed = self.user_transform(user_embed)
+        user_embed_expanded = user_embed_transformed.unsqueeze(1)
         combined = h * user_embed_expanded
         alpha = self.mlp(combined).squeeze(2)
         a = torch.softmax(alpha, dim=1)
-        z_l = torch.sum(a.unsqueeze(2) * history_embeds, dim=1)
+        z_l = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)
         return z_l
 
 class MidTermInterestModule(nn.Module):
     def __init__(self, embedding_dim, hidden_dim):
         super(MidTermInterestModule, self).__init__()
-        self.rnn = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        self.bn = nn.BatchNorm1d(hidden_dim)
-        self.dropout = nn.Dropout(0.5)
-        self.W_m = nn.Parameter(torch.randn(hidden_dim, embedding_dim))
+        self.combined_dim = 2 * embedding_dim  
+        self.rnn = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
+        self.W_m = nn.Parameter(torch.randn(hidden_dim, self.combined_dim))
         self.mlp = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
+            nn.Linear(self.combined_dim, self.combined_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(embedding_dim),
-            nn.Dropout(0.5),
-            nn.Linear(embedding_dim, 1)
+            nn.Linear(self.combined_dim, 1)
         )
+        self.user_transform = nn.Linear(embedding_dim, hidden_dim)
 
-    def forward(self, history_embeds, user_embed):
-        o, _ = self.rnn(history_embeds)
-        o = o.permute(0, 2, 1)  
-        o = self.bn(o)
-        o = o.permute(0, 2, 1)  
-        o = self.dropout(o)
+    def forward(self, item_his_embeds, cat_his_embeds, user_embed):
+        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
+        o, _ = self.rnn(combined_embeds)
         h = torch.matmul(o, self.W_m)
-        user_embed_expanded = user_embed.unsqueeze(1).expand(-1, h.size(1), -1)
+        user_embed_transformed = self.user_transform(user_embed)
+        user_embed_expanded = user_embed_transformed.unsqueeze(1)
         combined = h * user_embed_expanded
         alpha = self.mlp(combined).squeeze(2)
         a = torch.softmax(alpha, dim=1)
-        z_m = torch.sum(a.unsqueeze(2) * history_embeds, dim=1)
+        z_m = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)
         return z_m
 
 class ShortTermInterestModule(nn.Module):
     def __init__(self, embedding_dim, hidden_dim):
         super(ShortTermInterestModule, self).__init__()
-        self.rnn = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        self.bn = nn.BatchNorm1d(hidden_dim)  
-        self.dropout = nn.Dropout(0.5)  
-        self.W_s = nn.Parameter(torch.randn(hidden_dim, embedding_dim))
+        self.combined_dim = 2 * embedding_dim 
+        self.rnn = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
+        self.W_s = nn.Parameter(torch.randn(hidden_dim, self.combined_dim))
         self.mlp = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
+            nn.Linear(self.combined_dim, self.combined_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(embedding_dim),  
-            nn.Dropout(0.5),               
-            nn.Linear(embedding_dim, 1)
+            nn.Linear(self.combined_dim, 1)
         )
-    
-    def forward(self, history_embeds, user_embed):
-        o, _ = self.rnn(history_embeds)
-        o = o.permute(0, 2, 1)  
-        o = self.bn(o)  
-        o = o.permute(0, 2, 1) 
-        o = self.dropout(o)  
+        self.user_transform = nn.Linear(embedding_dim, hidden_dim)
+
+    def forward(self, item_his_embeds, cat_his_embeds, user_embed):
+        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
+        o, _ = self.rnn(combined_embeds)
         h = torch.matmul(o, self.W_s)
-        user_embed_expanded = user_embed.unsqueeze(1).expand(-1, h.size(1), -1)
+        user_embed_transformed = self.user_transform(user_embed)
+        user_embed_expanded = user_embed_transformed.unsqueeze(1)
         combined = h * user_embed_expanded
         alpha = self.mlp(combined).squeeze(2)
         a = torch.softmax(alpha, dim=1)
-        z_s = torch.sum(a.unsqueeze(2) * history_embeds, dim=1)
+        z_s = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)
         return z_s
     
-def long_term_interest_proxy(history_item_embeds):
+def long_term_interest_proxy(item_his_embeds, cat_his_embeds):
     """
-    Calculate the long-term interest proxy.
+    Calculate the long-term interest proxy using both item and category embeddings.
     """
-    p_l_t = torch.mean(history_item_embeds, dim=1)
+    combined_history_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
+    p_l_t = torch.mean(combined_history_embeds, dim=1)
     return p_l_t
 
-def mid_term_interest_proxy(history_item_embeds, mid_lens):
+def mid_term_interest_proxy(item_his_embeds, cat_his_embeds, mid_lens):
     """
-    Calculate the mid-term interest proxy using masking for variable lengths.
+    Calculate the mid-term interest proxy using masking for variable lengths and both item and category embeddings.
     """
-    device = history_item_embeds.device
-    max_len = history_item_embeds.size(1)
+    device = item_his_embeds.device
+    combined_history_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
+    max_len = combined_history_embeds.size(1)
     mask = torch.arange(max_len, device=device).expand(len(mid_lens), max_len) < mid_lens.unsqueeze(1).to(device)
     
-    masked_history = history_item_embeds * mask.unsqueeze(-1).type_as(history_item_embeds)
+    masked_history = combined_history_embeds * mask.unsqueeze(-1).type_as(combined_history_embeds)
     valid_counts = mask.sum(1, keepdim=True)
-
+    
     safe_valid_counts = torch.where(valid_counts > 0, valid_counts, torch.ones_like(valid_counts))
-    p_m_t = masked_history.sum(1) / safe_valid_counts.type_as(history_item_embeds)
+    p_m_t = masked_history.sum(1) / safe_valid_counts.type_as(combined_history_embeds)
     p_m_t = torch.nan_to_num(p_m_t, nan=0.0)
 
     return p_m_t
 
-def short_term_interest_proxy(history_item_embeds, short_lens):
+def short_term_interest_proxy(item_his_embeds, cat_his_embeds, short_lens):
     """
-    Calculate the short-term interest proxy.
+    Calculate the short-term interest proxy using both item and category embeddings.
     """
-    device = history_item_embeds.device
-    max_len = history_item_embeds.size(1)
+    device = item_his_embeds.device
+    combined_history_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
+    max_len = combined_history_embeds.size(1)
     mask = torch.arange(max_len, device=device).expand(len(short_lens), max_len) < short_lens.unsqueeze(1).to(device)
     
-    masked_history = history_item_embeds * mask.unsqueeze(-1).type_as(history_item_embeds)
+    masked_history = combined_history_embeds * mask.unsqueeze(-1).type_as(combined_history_embeds)
     valid_counts = mask.sum(1, keepdim=True)
-
+    
     safe_valid_counts = torch.where(valid_counts > 0, valid_counts, torch.ones_like(valid_counts))
-    p_s_t = masked_history.sum(1) / safe_valid_counts.type_as(history_item_embeds)
+    p_s_t = masked_history.sum(1) / safe_valid_counts.type_as(combined_history_embeds)
     p_s_t = torch.nan_to_num(p_s_t, nan=0.0)
 
     return p_s_t
@@ -160,72 +154,53 @@ def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s):
 class InterestFusionModule(nn.Module):
     def __init__(self, embedding_dim, hidden_dim, output_dim):
         super(InterestFusionModule, self).__init__()
-        self.gru_l = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        self.gru_m = nn.GRU(embedding_dim, hidden_dim, batch_first=True)
-        
-        # BatchNorm layers after GRU outputs
-        self.bn_l = nn.BatchNorm1d(hidden_dim)
-        self.bn_m = nn.BatchNorm1d(hidden_dim)
-
-        # Dropout layers after BatchNorm
-        self.dropout_l = nn.Dropout(0.5)
-        self.dropout_m = nn.Dropout(0.5)
+        self.combined_dim = 2 * embedding_dim  
+        self.gru_l = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
+        self.gru_m = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
+        input_dim_for_alpha = 3 * hidden_dim 
 
         self.mlp_alpha_l = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(input_dim_for_alpha, hidden_dim),
             nn.ReLU(),
-            # nn.BatchNorm1d(hidden_dim), 
-            nn.Dropout(0.5),             
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()
         )
         self.mlp_alpha_m = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(input_dim_for_alpha, hidden_dim),
             nn.ReLU(),
-            # nn.BatchNorm1d(hidden_dim), 
-            nn.Dropout(0.5),             
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()
         )
+        
         self.mlp_pred = nn.Sequential(
-            nn.Linear(embedding_dim * 2, output_dim),
-            nn.ReLU(),
-            nn.BatchNorm1d(output_dim), 
-            nn.Dropout(0.5),             
-            nn.Linear(output_dim, 1),
+            nn.Linear(embedding_dim * 3, output_dim),  
+            nn.ReLU(),            
+            nn.Linear(output_dim, output_dim),
             nn.Sigmoid()
         )
     
-    def forward(self, history_embeddings, mid_lens, z_l, z_m, z_s, item_embedding):
+    def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embedding):
+        # Combine item and category history embeddings
+        combined_history_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
+        
         # Long-term history feature extraction
-        h_l, _ = self.gru_l(history_embeddings)
-        h_l = h_l[:, -1, :]  # Get the last hidden state
-        h_l = self.bn_l(h_l)
-        h_l = self.dropout_l(h_l)  
+        h_l, _ = self.gru_l(combined_history_embeds)
+        h_l = h_l[:, -1, :]  
 
         # Mid-term history feature extraction
-        batch_size, seq_len, _ = history_embeddings.size()     
-        device = history_embeddings.device 
-        masks = torch.arange(seq_len, device=device).expand(batch_size, seq_len) >= (seq_len - mid_lens.unsqueeze(1).to(device))  
-        masks = masks.to(history_embeddings.device)
-        
-        # 마스킹 적용
-        masked_embeddings = history_embeddings * masks.unsqueeze(-1).float()
+        batch_size, seq_len, _ = combined_history_embeds.size()     
+        masks = torch.arange(seq_len, device=mid_lens.device).expand(batch_size, seq_len) >= (seq_len - mid_lens.unsqueeze(1))   
+        masked_embeddings = combined_history_embeds * masks.unsqueeze(-1).float()
 
-        # GRU 실행
-        h_m, _ = self.gru_m(masked_embeddings) # Use the most recent mid_lens embeddings
-        h_m = h_m[:, -1, :]  # Get the last hidden state
-        h_m = self.bn_l(h_m)
-        h_m = self.dropout_m(h_m)  
+        h_m, _ = self.gru_m(masked_embeddings)
+        h_m = h_m[:, -1, :] 
 
-        # Calculate attention weights
+        # Attention weights
         alpha_l = self.mlp_alpha_l(torch.cat((h_l, z_l, z_m), dim=1))
         alpha_m = self.mlp_alpha_m(torch.cat((h_m, z_m, z_s), dim=1))
 
-        # Final interest representation
+        # Interest representation
         z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
-        # Predict the likelihood of selecting an item
-        item_embedding = item_embedding.squeeze(0)
         y_int = self.mlp_pred(torch.cat((z_t, item_embedding), dim=1))
 
         return y_int
@@ -244,10 +219,11 @@ class BCELossModule(nn.Module):
         return self.loss_fn(y_pred, y_true)
     
 class CAMP(nn.Module):
-    def __init__(self, num_users, num_items, embedding_dim, hidden_dim, output_dim):
+    def __init__(self, num_users, num_items, num_cats, embedding_dim, hidden_dim, output_dim):
         super(CAMP, self).__init__()
         self.user_embedding = nn.Embedding(num_users, embedding_dim)
         self.item_embedding = nn.Embedding(num_items + 1, embedding_dim, padding_idx=0)
+        self.cat_embedding = nn.Embedding(num_cats + 1, embedding_dim, padding_idx=0)
         self.long_term_module = LongTermInterestModule(embedding_dim)
         self.mid_term_module = MidTermInterestModule(embedding_dim, hidden_dim)
         self.short_term_module = ShortTermInterestModule(embedding_dim, hidden_dim)
@@ -257,28 +233,30 @@ class CAMP(nn.Module):
     def forward(self, batch):
         user_ids = batch['user']
         item_ids = batch['item']
-        history_items_padded = batch['history']
+        items_history_padded = batch['item_his']        
+        cats_history_padded = batch['cat_his']        
         mid_lens = batch['mid_len']
         short_lens = batch['short_len']
         neg_item_ids = batch['neg_items']
         
         user_embeds = self.user_embedding(user_ids)
         item_embeds = self.item_embedding(item_ids)
-        history_embeds = self.item_embedding(history_items_padded)
+        item_his_embeds = self.item_embedding(items_history_padded)
+        cat_his_embeds = self.cat_embedding(cats_history_padded)
         neg_item_embeds = self.item_embedding(neg_item_ids)
 
-        z_l = self.long_term_module(history_embeds, user_embeds)
-        z_m = self.mid_term_module(history_embeds, user_embeds)
-        z_s = self.short_term_module(history_embeds, user_embeds)
+        z_l = self.long_term_module(item_his_embeds, cat_his_embeds, user_embeds)
+        z_m = self.mid_term_module(item_his_embeds, cat_his_embeds, user_embeds)
+        z_s = self.short_term_module(item_his_embeds, cat_his_embeds, user_embeds)
 
-        p_l = long_term_interest_proxy(history_embeds)
-        p_m = mid_term_interest_proxy(history_embeds, mid_lens)
-        p_s = short_term_interest_proxy(history_embeds, short_lens)
+        p_l = long_term_interest_proxy(item_his_embeds, cat_his_embeds)
+        p_m = mid_term_interest_proxy(item_his_embeds, cat_his_embeds, mid_lens)
+        p_s = short_term_interest_proxy(item_his_embeds, cat_his_embeds, short_lens)
         loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s)
 
-        y_int_pos = self.interest_fusion_module(history_embeds, mid_lens, z_l, z_m, z_s, item_embeds)        
+        y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds)        
         y_int_negs = torch.stack([
-            self.interest_fusion_module(history_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1))
+            self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1))
             for neg_embed in neg_item_embeds.split(1, dim=1)
         ], dim=1).squeeze(2)
         loss_bce_pos = self.bce_loss_module(y_int_pos, torch.ones_like(y_int_pos))

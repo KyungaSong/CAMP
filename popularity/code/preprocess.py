@@ -5,8 +5,8 @@ import gzip
 import json
 from sklearn.model_selection import train_test_split
 
-def load_dataset(file_path, side = False):    
-    if side:
+def load_dataset(file_path, meta = False):    
+    if meta:
         with gzip.open(file_path, 'rt', encoding='utf-8') as gz:
             data = [json.loads(line) for line in gz]
         df = pd.DataFrame(data)
@@ -17,12 +17,12 @@ def load_dataset(file_path, side = False):
         df = df.rename(columns={'parent_asin': 'item_id'})          
     return df
 
-def preprocess_df(df, df_side, item_encoder, cat_encoder, store_encoder, pop_time_unit): 
+def preprocess_df(df, df_meta, item_encoder, cat_encoder, store_encoder, pop_time_unit): 
     
     df['item_encoded'] = item_encoder.transform(df['item_id']) + 1  
-    df_side['item_encoded'] = item_encoder.transform(df_side['item_id']) + 1
-    df_side['cat_encoded'] = cat_encoder.transform(df_side['category'])
-    df_side['store_encoded'] = store_encoder.transform(df_side['store'])
+    df_meta['item_encoded'] = item_encoder.transform(df_meta['item_id']) + 1
+    df_meta['cat_encoded'] = cat_encoder.transform(df_meta['category'])
+    df_meta['store_encoded'] = store_encoder.transform(df_meta['store'])
 
     min_time_all = df['timestamp'].min()
     df['unit_time'] = (df['timestamp'] - min_time_all) // pop_time_unit
@@ -36,15 +36,11 @@ def preprocess_df(df, df_side, item_encoder, cat_encoder, store_encoder, pop_tim
     min_unit_time_per_item = df.groupby('item_encoded')['unit_time'].min().rename('release_time')
     df_pop = df_pop.merge(min_unit_time_per_item, on='item_encoded')
 
-    df_merged = pd.merge(df_pop, df_side, on='item_encoded', how='left').drop_duplicates(subset=['item_encoded'])
+    df_merged = pd.merge(df_pop, df_meta, on='item_encoded', how='left').drop_duplicates(subset=['item_encoded'])
 
     columns = ['item_encoded', 'pop_history', 'release_time', 'avg_rating', 'rating_number', 'cat_encoded', 'store_encoded']
     df_filtered = df_merged[columns]
-
-    # 훈련 데이터와 나머지 데이터 분할 (80%, 20%)
     train_df, temp_df = train_test_split(df_filtered, test_size=0.3, random_state=42)
-
-    # 나머지 데이터를 검증 데이터와 테스트 데이터로 분할 (각각 50%, 총 20%의 10%+10%)
     valid_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42)
 
     return train_df, valid_df, test_df

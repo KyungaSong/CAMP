@@ -1,13 +1,26 @@
 import random
 import pandas as pd
 import time
+import argparse
 from sklearn.preprocessing import LabelEncoder
-from preprocess import load_dataset, preprocess_df, create_datasets
-
+import torch
 from torch.utils.data import DataLoader
+
+from config import Config
+from preprocess import load_dataset, preprocess_df, create_datasets
+from Model import ModulePopHistory
+
 
 ########################################################### config
 random.seed(42) 
+torch.manual_seed(2024)
+torch.cuda.manual_seed(2024)
+
+parser = argparse.ArgumentParser()
+config = Config.Config(args=args)
+
+parser.add_argument("--alpha", type=float, default=0.7,
+                    help="parameter for balance of pop_history and time")
 max_length = 128
 time_unit = 1000 * 60 * 60 * 24 # a day
 pop_time_unit = 30 * time_unit # a month
@@ -39,3 +52,7 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size)
 end_time = time.time()
 load_t = end_time - start_time
 print(f"Dataset prepared in {load_t:.2f} seconds")
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+module = ModulePopHistory(config)
