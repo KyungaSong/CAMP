@@ -3,7 +3,7 @@ class Config:
     time_range = 30 * time_unit # a month
     k_m = 3 * 12 * time_range # three year
     k_s = 6 * time_range # 6 month
-    batch_size = 256
+    batch_size = 128
 
     # Instantiate the model
     embedding_dim = 128
@@ -12,3 +12,5 @@ class Config:
     num_epochs = 10
 
     data_preprocessed = False
+
+    k = 10

@@ -2,8 +2,7 @@ import random
 import pandas as pd
 import numpy as np
 import pickle
-import gzip
-import json
+from functools import lru_cache
 import torch
 from torch.utils.data import Dataset
 
@@ -51,6 +50,13 @@ def generate_negative_samples(all_item_ids, positive_item_id, history, num_sampl
     neg_samples = random.sample(non_interacted_items, min(num_samples, len(non_interacted_items)))
     return neg_samples
 
+@lru_cache(maxsize=1024)  
+def generate_negative_samples_cached(all_item_ids, positive_item_id, history_tuple, num_samples=4):
+    history = set(history_tuple)  
+    non_interacted_items = list(all_item_ids - history - {positive_item_id})
+    neg_samples = random.sample(non_interacted_items, min(num_samples, len(non_interacted_items)))
+    return neg_samples
+
 def preprocess_df(df, time_range, k_m, k_s): 
     df['user_encoded'] = encode_column(df['user_id'])
     df['item_encoded'] = encode_column(df['item_id'], pad = True)
@@ -74,13 +80,34 @@ def preprocess_df(df, time_range, k_m, k_s):
 
     df = df[['user_id', 'user_encoded', 'item_encoded', 'cat_encoded', 'item_his_encoded', 'cat_his_encoded', 'unit_time', 'mid_len', 'short_len']]
     
+    print('Split into train, valid, test dataframe...')
     train_df = df.groupby('user_id').apply(lambda x: x.iloc[:-2], include_groups=False).reset_index(drop=True)
     valid_df = df.groupby('user_id').apply(lambda x: x.iloc[-2:-1], include_groups=False).reset_index(drop=True)
     test_df = df.groupby('user_id').apply(lambda x: x.iloc[-1:], include_groups=False).reset_index(drop=True)       
 
-    train_df['neg_items'] = train_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded'], num_samples=4), axis=1)
-    valid_df['neg_items'] = valid_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded'], num_samples=4), axis=1)
-    test_df['neg_items'] = test_df.apply(lambda x: generate_negative_samples(all_item_ids, None, x['item_his_encoded'], num_samples=49), axis=1)
+    print('Making negative sample start')
+    # train_df['neg_items'] = train_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded'], num_samples=4), axis=1)    
+    # valid_df['neg_items'] = valid_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded'], num_samples=4), axis=1)
+    # test_df['neg_items'] = test_df.apply(lambda x: generate_negative_samples(all_item_ids, None, x['item_his_encoded'], num_samples=49), axis=1)
+    train_df['neg_items'] = train_df.apply(lambda x: generate_negative_samples_cached(
+        frozenset(all_item_ids), 
+        x['item_encoded'], 
+        tuple(x['item_his_encoded']), 
+        num_samples=4
+    ), axis=1)
+    valid_df['neg_items'] = valid_df.apply(lambda x: generate_negative_samples_cached(
+        frozenset(all_item_ids), 
+        x['item_encoded'], 
+        tuple(x['item_his_encoded']), 
+        num_samples=4
+    ), axis=1)
+    test_df['neg_items'] = test_df.apply(lambda x: generate_negative_samples_cached(
+        frozenset(all_item_ids), 
+        None, 
+        tuple(x['item_his_encoded']), 
+        num_samples=4
+    ), axis=1)
+    print('Making negative sample end')
     return train_df, valid_df, test_df
 
 class MakeDataset(Dataset):

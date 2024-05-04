@@ -6,14 +6,18 @@ class LongTermInterestModule(nn.Module):
     def __init__(self, embedding_dim):
         super(LongTermInterestModule, self).__init__()
         self.combined_dim = 2 * embedding_dim  
-        self.W_l = nn.Parameter(torch.randn(self.combined_dim, self.combined_dim))
+        self.W_l = nn.Parameter(torch.Tensor(self.combined_dim, self.combined_dim))
+        nn.init.xavier_uniform_(self.W_l) 
         self.mlp = nn.Sequential(
             nn.Linear(self.combined_dim, self.combined_dim),
             nn.ReLU(),
-            nn.Linear(self.combined_dim, 1)
-            
+            nn.Linear(self.combined_dim, 1)            
         )
+        for layer in self.mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
         self.user_transform = nn.Linear(embedding_dim, 2 * embedding_dim)
+        nn.init.xavier_uniform_(self.user_transform.weight)
     
     def forward(self, item_his_embeds, cat_his_embeds, user_embed):        
         combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)        
@@ -31,13 +35,24 @@ class MidTermInterestModule(nn.Module):
         super(MidTermInterestModule, self).__init__()
         self.combined_dim = 2 * embedding_dim  
         self.rnn = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
-        self.W_m = nn.Parameter(torch.randn(hidden_dim, self.combined_dim))
+        self.W_m = nn.Parameter(torch.Tensor(hidden_dim, self.combined_dim))
+        nn.init.xavier_uniform_(self.W_m)
         self.mlp = nn.Sequential(
             nn.Linear(self.combined_dim, self.combined_dim),
             nn.ReLU(),
             nn.Linear(self.combined_dim, 1)
         )
+        for layer in self.mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
         self.user_transform = nn.Linear(embedding_dim, hidden_dim)
+        nn.init.xavier_uniform_(self.user_transform.weight)
+
+        for name, param in self.rnn.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                nn.init.xavier_uniform_(param.data)
 
     def forward(self, item_his_embeds, cat_his_embeds, user_embed):
         combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
@@ -56,13 +71,25 @@ class ShortTermInterestModule(nn.Module):
         super(ShortTermInterestModule, self).__init__()
         self.combined_dim = 2 * embedding_dim 
         self.rnn = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
-        self.W_s = nn.Parameter(torch.randn(hidden_dim, self.combined_dim))
+        self.W_s = nn.Parameter(torch.Tensor(hidden_dim, self.combined_dim))
+        nn.init.xavier_uniform_(self.W_s)
         self.mlp = nn.Sequential(
             nn.Linear(self.combined_dim, self.combined_dim),
             nn.ReLU(),
             nn.Linear(self.combined_dim, 1)
         )
+        for layer in self.mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
         self.user_transform = nn.Linear(embedding_dim, hidden_dim)
+        nn.init.xavier_uniform_(self.user_transform.weight)
+
+        # Initialize GRU weights
+        for name, param in self.rnn.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                nn.init.xavier_uniform_(param.data)
 
     def forward(self, item_his_embeds, cat_his_embeds, user_embed):
         combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)

@@ -1,9 +1,7 @@
 import numpy as np
 import torch
-import torch.optim as optim
-from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
-from evaluate import precision_at_k, recall_at_k, ndcg_at_k, hit_rate_at_k
+import torch.nn as nn
 from sklearn.metrics import roc_auc_score
 
 def train(model, data_loader, optimizer, device):
@@ -13,9 +11,9 @@ def train(model, data_loader, optimizer, device):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
 
-        loss, _, _ = model(batch)
-        loss = loss.mean()  
-        total_loss += loss.item()
+        pop_history_output = model(batch['pop_history'], batch['release_time'])
+        criteria = nn.MSELoss()
+        loss = criteria(pop_history_output.squeeze(), batch['pop_history'])
 
         loss.backward()
         optimizer.step()
