@@ -9,9 +9,10 @@ def train(model, data_loader, optimizer, device):
     total_loss = 0
     for batch in tqdm(data_loader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
+        print(batch['pop_history'][0])
         optimizer.zero_grad()
 
-        pop_history_output = model(batch['pop_history'], batch['release_time'])
+        pop_history_output = model(batch['pop_history'])
         criteria = nn.MSELoss()
         loss = criteria(pop_history_output.squeeze(), batch['pop_history'])
 
@@ -53,9 +54,11 @@ def test(model, data_loader, device, k=10):
     model.eval()  
     total_loss = 0
     all_top_k_items = []
+    all_top_2_items = []
     precision_scores = []
     recall_scores = []
     ndcg_scores = []
+    ndcg_2_scores = []
     hit_rates = []
     auc_scores = []
     mrr_scores = []
@@ -69,17 +72,25 @@ def test(model, data_loader, device, k=10):
             total_loss += loss.item()
 
             _, top_k_indices = torch.topk(y_int_negs, k, dim=1)
-            top_k_neg_item_ids = torch.gather(batch['neg_items'], 1, top_k_indices)
+            
+            top_k_neg_item_ids = torch.gather(batch['neg_items'], 1, top_k_indices)            
             all_top_k_items.append(top_k_neg_item_ids.cpu().numpy())
+            _, top_2_indices = torch.topk(y_int_negs, 2, dim=1)
+
+            top_2_neg_item_ids = torch.gather(batch['neg_items'], 1, top_2_indices)
+            all_top_2_items.append(top_2_neg_item_ids.cpu().numpy())
 
             actual_items = batch['item'].unsqueeze(1)
             hits = (top_k_neg_item_ids == actual_items).any(dim=1).float()
+            hits_2 = (top_2_neg_item_ids == actual_items).any(dim=1).float()
 
             precision = (hits.sum() / (k * len(batch['user']))).item() 
             recall = (hits.sum() / len(batch['user'])).item()
             log_positions = torch.log2(top_k_indices.float() + 2.0)
             ndcg_contributions = torch.div(torch.log2(torch.tensor(2.0)), log_positions) * hits.unsqueeze(1)
             ndcg = (ndcg_contributions.sum() / len(batch['user'])).item()
+            ndcg_2_contributions = torch.div(torch.log2(torch.tensor(2.0)), log_positions) * hits_2.unsqueeze(1)
+            ndcg_2 = (ndcg_2_contributions.sum() / len(batch['user'])).item()
             hit_rate = hits.mean().item()
 
             true_labels = torch.cat((torch.ones_like(y_int_pos), torch.zeros_like(y_int_negs)), dim=1).flatten()
@@ -94,17 +105,19 @@ def test(model, data_loader, device, k=10):
             precision_scores.append(precision)
             recall_scores.append(recall)
             ndcg_scores.append(ndcg)
+            ndcg_2_scores.append(ndcg_2)
             hit_rates.append(hit_rate)
     
     average_loss = total_loss / len(data_loader)
     avg_precision = np.mean(precision_scores)
     avg_recall = np.mean(recall_scores)
     avg_ndcg = np.mean(ndcg_scores)
+    avg_ndcg_2 = np.mean(ndcg_2_scores)
     avg_hit_rate = np.mean(hit_rates)
     avg_auc = np.mean(auc_scores)
     avg_mrr = np.mean(mrr_scores)
 
     print(f"Test Loss: {average_loss:.4f}")
-    print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
+    print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
     print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
-    return average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr
+    return average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr

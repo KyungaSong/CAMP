@@ -3,14 +3,17 @@ class Config:
     time_range = 30 * time_unit # a month
     k_m = 3 * 12 * time_range # three year
     k_s = 6 * time_range # 6 month
-    batch_size = 128
+    
+    train_neg_num = 4
+    valid_neg_num = 4
+    test_neg_num = 49
 
     # Instantiate the model
     embedding_dim = 128
     hidden_dim = 256
     output_dim = 1
-    num_epochs = 10
-
+    num_epochs = 30
+    batch_size = 128
+    
     data_preprocessed = False
-
-    k = 10
+    k = 20

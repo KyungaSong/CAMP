@@ -41,6 +41,8 @@ parser.add_argument("--pop_time_unit", type=int, default=30,
                     help="smallest time unit for item popularity statistic")
 parser.add_argument("--data_preprocessed", type=bool, default=True,
                     help="whether the input data has already been preprocessed")
+parser.add_argument("--embedding_dim", type=int, default=512,
+                    help="embedding size for embedding vectors")
 args = parser.parse_args()
 config = Config(args=args)
 
@@ -72,17 +74,16 @@ def load_data(dataset_name):
             start_time = time.time()
             df = load_dataset(review_file_path)
             df_meta = load_dataset(meta_file_path, meta=True)
-            df = pd.merge(df, df_meta, on='item_id', how='left')
-
-            print("df:\n", df)
-
+            
             num_users = df['user_id'].nunique()
             num_items = df['item_id'].nunique()
-            num_cats = df['category'].nunique()
-            num_stores = df['store'].nunique()
+            num_cats = df_meta['category'].nunique()
+            num_stores = df_meta['store'].nunique()
             print(f'num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}, num_stores: {num_stores}')
 
-            train_df, valid_df, test_df = preprocess_df(df, config)
+            df = pd.merge(df, df_meta, on='item_id', how='left')
+            print("df:\n", df)
+            train_df, valid_df, test_df, max_time = preprocess_df(df, config)
 
             if not os.path.exists(processed_path):
                 os.makedirs(processed_path)
@@ -97,13 +98,13 @@ def load_data(dataset_name):
             logging.error(f"Error during data preparation: {str(e)}")
             raise
 
-    return train_df, valid_df, test_df, num_users, num_items, num_cats, num_stores
+    return train_df, valid_df, test_df, num_users, num_items, num_cats, num_stores, max_time
 
 def main():
     print("Data preprocessing......")
     setup_logging()
     dataset_name = 'sampled_Home_and_Kitchen'
-    train_df, valid_df, test_df, num_users, num_items, num_cats, num_stores = load_data(dataset_name = dataset_name)
+    train_df, valid_df, test_df, num_users, num_items, num_cats, num_stores, max_time = load_data(dataset_name = dataset_name)
 
     print("Create datasets......")
     train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
@@ -116,7 +117,7 @@ def main():
     print("Training......")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = PopPredict(config)
+    model = PopPredict(True, config, num_items, max_time).to(device)
     if torch.cuda.device_count() > 1:
         print(f"Let's use {torch.cuda.device_count()} GPUs!")
         model = nn.DataParallel(model)
@@ -126,7 +127,7 @@ def main():
 
     print("Training......")
     # Train and evaluate
-    for epoch in range(Config.num_epochs):
+    for epoch in range(config.num_epochs):
         train_loss = train(model, train_loader, optimizer, device)
         # valid_loss = evaluate(model, valid_loader, device)
         # logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
