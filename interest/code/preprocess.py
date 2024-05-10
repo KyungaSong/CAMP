@@ -6,6 +6,8 @@ from functools import lru_cache
 import torch
 from torch.utils.data import Dataset
 
+from tqdm.auto import tqdm
+
 def load_dataset(file_path, meta = False):
     with open(file_path, 'rb') as file:
         df = pickle.load(file) 
@@ -36,7 +38,7 @@ def get_history(group):
 
 def calculate_ranges(group, k_m, k_s):
     if not pd.api.types.is_datetime64_any_dtype(group['timestamp']):
-        group['timestamp'] = pd.to_datetime(group['timestamp'])
+        group['timestamp'] = pd.to_datetime(group['timestamp'], unit='ms')
     k_m_delta = pd.Timedelta(milliseconds=k_m)
     k_s_delta = pd.Timedelta(milliseconds=k_s)
 
@@ -51,13 +53,6 @@ def generate_negative_samples(all_item_ids, positive_item_id, history):
     non_interacted_items = list(all_item_ids - set(history) - {positive_item_id})
     return non_interacted_items
 
-# def generate_negative_samples(all_items_set, positive_item_id, history_set):
-#     if positive_item_id is None:
-#         non_interacted_items = list(all_items_set - history_set)
-#     else:
-#         non_interacted_items = list(all_items_set - history_set - {positive_item_id})
-#     return non_interacted_items
-
 @lru_cache(maxsize=1024)  
 def generate_negative_samples_cached(all_item_ids, positive_item_id, history_tuple, num_samples=4):
     history = set(history_tuple)  
@@ -65,8 +60,7 @@ def generate_negative_samples_cached(all_item_ids, positive_item_id, history_tup
     neg_samples = random.sample(non_interacted_items, min(num_samples, len(non_interacted_items)))
     return neg_samples
 
-def preprocess_df(df, Config): 
-    
+def preprocess_df(df, Config):     
     df['user_encoded'] = encode_column(df['user_id'])
     df['item_encoded'] = encode_column(df['item_id'], pad = True)
     df['cat_encoded'] = encode_column(df['category'], pad = True)
@@ -98,33 +92,35 @@ def preprocess_df(df, Config):
     test_df = df.groupby('user_id').apply(lambda x: x.iloc[-1:], include_groups=False).reset_index(drop=True)       
 
     print('Making negative candidates start')
+    
     # train_df['can_neg'] = train_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded']), axis=1)
     # print('train df end')    
     # valid_df['can_neg'] = valid_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded']), axis=1)
     # print('train df end') 
     # test_df['can_neg'] = test_df.apply(lambda x: generate_negative_samples(all_item_ids, None, x['item_his_encoded']), axis=1)
     # print('test df end')
-    train_df['neg_items'] = train_df.apply(lambda x: generate_negative_samples_cached(
+    tqdm.pandas(desc="Generating negative samples for training dataset")
+    train_df['neg_items'] = train_df.progress_apply(
+    lambda x: generate_negative_samples_cached(
         frozenset(all_item_ids), 
         x['item_encoded'], 
         tuple(x['item_his_encoded']), 
-        num_samples=4
+        num_samples= Config.train_num_samples
     ), axis=1)
-    print('train df end') 
-    valid_df['neg_items'] = valid_df.apply(lambda x: generate_negative_samples_cached(
+    tqdm.pandas(desc="Generating negative samples for valid dataset")
+    valid_df['neg_items'] = valid_df.progress_apply(lambda x: generate_negative_samples_cached(
         frozenset(all_item_ids), 
         x['item_encoded'], 
         tuple(x['item_his_encoded']), 
-        num_samples=4
+        num_samples = Config.valid_num_samples
     ), axis=1)
-    print('valid df end') 
-    test_df['neg_items'] = test_df.apply(lambda x: generate_negative_samples_cached(
+    tqdm.pandas(desc="Generating negative samples for test dataset")
+    test_df['neg_items'] = test_df.progress_apply(lambda x: generate_negative_samples_cached(
         frozenset(all_item_ids), 
-        None, 
+        x['item_encoded'], 
         tuple(x['item_his_encoded']), 
-        num_samples=49
+        num_samples = Config.test_num_samples
     ), axis=1)
-    print('test df neg sampling end') 
     test_df['neg_items'] = test_df['neg_items'] + test_df['item_encoded'].apply(lambda x: [x])
     print('Making negative candidates end')
     return train_df, valid_df, test_df, item_to_cat_dict

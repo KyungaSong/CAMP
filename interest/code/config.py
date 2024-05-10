@@ -2,11 +2,11 @@ class Config:
     time_unit = 60*60*24*1000 # a day
     time_range = 30 * time_unit # a month
     k_m = 3 * 12 * time_range # three year
-    k_s = 6 * time_range # 6 month
+    k_s = 6 * time_range # six month
     
-    train_neg_num = 4
-    valid_neg_num = 4
-    test_neg_num = 49
+    train_num_samples = 4
+    valid_num_samples = 4
+    test_num_samples = 49
 
     # Instantiate the model
     embedding_dim = 128
@@ -15,5 +15,5 @@ class Config:
     num_epochs = 30
     batch_size = 128
     
-    data_preprocessed = False
+    data_preprocessed = True
     k = 20

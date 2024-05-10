@@ -103,7 +103,7 @@ def load_data(dataset_name):
 def main():
     print("Data preprocessing......")
     setup_logging()
-    dataset_name = 'sampled_Home_and_Kitchen'
+    dataset_name = 'toy_Home_and_Kitchen'
     train_df, valid_df, test_df, num_users, num_items, num_cats, num_stores, max_time = load_data(dataset_name = dataset_name)
 
     print("Create datasets......")
@@ -117,10 +117,10 @@ def main():
     print("Training......")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = PopPredict(True, config, num_items, max_time).to(device)
-    if torch.cuda.device_count() > 1:
-        print(f"Let's use {torch.cuda.device_count()} GPUs!")
-        model = nn.DataParallel(model)
+    model = PopPredict(True, config, num_items, max_time, num_cats, num_stores).to(device)
+    # if torch.cuda.device_count() > 1:
+    #     print(f"Let's use {torch.cuda.device_count()} GPUs!")
+    #     model = nn.DataParallel(model)
         
     # Define the optimizer
     optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)

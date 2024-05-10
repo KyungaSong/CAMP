@@ -48,7 +48,6 @@ def load_data(dataset_name):
             start_time = time.time()
             df = load_dataset(review_file_path)
             df_meta = load_dataset(meta_file_path, meta=True)
-            print("df_meta: ", df_meta)
 
             num_users = df['user_id'].nunique()
             num_items = df['item_id'].nunique()

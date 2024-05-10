@@ -9,10 +9,10 @@ def train(model, data_loader, optimizer, device):
     total_loss = 0
     for batch in tqdm(data_loader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
-        print(batch['pop_history'][0])
         optimizer.zero_grad()
-
-        pop_history_output = model(batch['pop_history'])
+        pop_history_output, time_output, sideinfo_output = model(batch)
+        print("sideinfo_output shape: \n", sideinfo_output.size())
+        print("sideinfo_output: \n", sideinfo_output)
         criteria = nn.MSELoss()
         loss = criteria(pop_history_output.squeeze(), batch['pop_history'])
 

@@ -51,7 +51,7 @@ def evaluate(model, data_loader, item_to_cat_dict, device):
     return average_loss, accuracy
 
 # 4) Testing
-def test(model, data_loader, device, k=10):
+def test(model, data_loader, item_to_cat_dict, device, k=10):
     model.eval()  
     total_loss = 0
     all_top_k_items = []
@@ -68,7 +68,7 @@ def test(model, data_loader, device, k=10):
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
             
-            loss, y_int_pos, y_int_negs = model(batch)
+            loss, y_int_pos, y_int_negs = model(batch, item_to_cat_dict, device)
             loss = loss.mean()
             total_loss += loss.item()
 

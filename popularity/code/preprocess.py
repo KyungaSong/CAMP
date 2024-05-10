@@ -8,9 +8,9 @@ def load_dataset(file_path, meta = False):
     with open(file_path, 'rb') as file:
         df = pickle.load(file) 
     if meta:
-        necessary_columns = ['average_rating', 'rating_number', 'store', 'parent_asin', 'category']
+        necessary_columns = ['average_rating', 'rating_number', 'store', 'parent_asin', 'categories']
         df = df[necessary_columns].rename(columns={'average_rating': 'avg_rating', 'parent_asin': 'item_id'})
-        df['category'] = df['category'].apply(lambda x: x[1] if len(x) > 1 else (x[0] if len(x) == 1 else None))
+        df['category'] = df['categories'].apply(lambda x: x[1] if len(x) > 1 else (x[0] if len(x) == 1 else None))
     else:        
         df = df.rename(columns={'parent_asin': 'item_id'})          
     return df
@@ -37,25 +37,24 @@ def preprocess_df(df, config):
     count_per_group = count_per_group.reindex(columns=time_range, fill_value=0)
     df_pop = count_per_group.apply(lambda row: row.tolist(), axis=1)
     df_pop = df_pop.reset_index(name='pop_history')
-    print("df_pop:\n", df_pop)
     min_unit_time_per_item = df.groupby('item_encoded')['unit_time'].min().rename('release_time')
     df_pop = df_pop.merge(min_unit_time_per_item, on='item_encoded')
 
-    additional_info = df.groupby('item_encoded')[['avg_rating', 'rating_number', 'cat_encoded', 'store_encoded']].first().reset_index()
+    additional_info = df.groupby('item_encoded')[['unit_time','avg_rating', 'rating_number', 'cat_encoded', 'store_encoded']].first().reset_index()
     df_pop = df_pop.merge(additional_info, on='item_encoded', how='left')
     print("df_pop:\n", df_pop)
     
-    print("pop history ex: \n", df_pop['pop_history'].iloc[10])
     train_df, temp_df = train_test_split(df_pop, test_size=0.3, random_state=42)
     valid_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42)
 
     return train_df, valid_df, test_df, max_time
 
 class MakeDataset(Dataset):
-    def __init__(self, items, pop_histories, release_times, avg_ratings, rating_numbers, categories, stores):
-        self.items = torch.tensor(items.values, dtype=torch.long)
-        self.pop_histories = [torch.tensor(h, dtype=torch.long) for h in pop_histories]
+    def __init__(self, items, times, release_times, pop_histories,avg_ratings, rating_numbers, categories, stores):
+        self.items = torch.tensor(items.values, dtype=torch.long)        
+        self.times = torch.tensor(times.values, dtype=torch.int)
         self.release_times = torch.tensor(release_times.values, dtype=torch.int)
+        self.pop_histories = [torch.tensor(h, dtype=torch.long) for h in pop_histories]
         self.avg_ratings = torch.tensor(avg_ratings.values, dtype=torch.long)
         self.rating_numbers = torch.tensor(rating_numbers.values, dtype=torch.int)
         self.categories = torch.tensor(categories.values, dtype=torch.long)
@@ -67,8 +66,9 @@ class MakeDataset(Dataset):
     def __getitem__(self, idx):
         data = {
             'item': self.items[idx],
-            'pop_history': self.pop_histories[idx],
+            'time': self.times[idx],
             'release_time': self.release_times[idx],
+            'pop_history': self.pop_histories[idx],            
             'avg_rating': self.avg_ratings[idx],
             'rating_number': self.rating_numbers[idx],
             'category': self.categories[idx],
@@ -78,15 +78,13 @@ class MakeDataset(Dataset):
 
 def create_datasets(train_df, valid_df, test_df):
     train_dataset = MakeDataset(
-        train_df['item_encoded'], train_df['pop_history'],
-        train_df['release_time'], train_df['avg_rating'], train_df['rating_number'], train_df['cat_encoded'], train_df['store_encoded']
+        train_df['item_encoded'], train_df['unit_time'], train_df['release_time'], train_df['pop_history'],
+        train_df['avg_rating'], train_df['rating_number'], train_df['cat_encoded'], train_df['store_encoded']
     )
     valid_dataset = MakeDataset(
-        valid_df['item_encoded'], valid_df['pop_history'],
-        valid_df['release_time'], valid_df['avg_rating'], valid_df['rating_number'], valid_df['cat_encoded'], valid_df['store_encoded']
+        valid_df['item_encoded'], valid_df['unit_time'], valid_df['release_time'], valid_df['pop_history'], valid_df['avg_rating'], valid_df['rating_number'], valid_df['cat_encoded'], valid_df['store_encoded']
     )
     test_dataset = MakeDataset(
-        test_df['item_encoded'], test_df['pop_history'],
-        test_df['release_time'], test_df['avg_rating'], test_df['rating_number'], test_df['cat_encoded'], test_df['store_encoded']
+        test_df['item_encoded'], test_df['unit_time'], test_df['release_time'], test_df['pop_history'], test_df['avg_rating'], test_df['rating_number'], test_df['cat_encoded'], test_df['store_encoded']
     )
     return train_dataset, valid_dataset, test_dataset
