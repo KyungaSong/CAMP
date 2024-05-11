@@ -122,3 +122,23 @@ def test(model, data_loader, item_to_cat_dict, device, k=10):
     print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
     print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
     return average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr
+
+class EarlyStopping:
+    def __init__(self, patience=7, verbose=False, delta=0):
+        self.patience = patience
+        self.verbose = verbose
+        self.delta = delta
+        self.best_loss = float('inf')
+        self.early_stop = False
+        self.counter = 0
+
+    def __call__(self, val_loss):
+        if val_loss < self.best_loss - self.delta:
+            self.best_loss = val_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True

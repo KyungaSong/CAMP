@@ -10,15 +10,27 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import Adam
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.multiprocessing import spawn
 
 from config import Config
 from preprocess import load_dataset, preprocess_df, create_datasets
 from Model import CAMP
-from training_utils import train, evaluate, test
+from training_utils import train, evaluate, test, EarlyStopping
 
 random.seed(2024) 
 torch.manual_seed(2024)
 torch.cuda.manual_seed(2024)
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = '147.47.236.45'  
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+def cleanup():
+    dist.destroy_process_group()
 
 def setup_logging():
     logging.basicConfig(filename='../../log.txt', level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s')
@@ -71,7 +83,8 @@ def load_data(dataset_name):
 
     return train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict
 
-def main():
+def main(rank, world_size):
+    setup(rank, world_size)
     print("Data preprocessing......")
     setup_logging()
     dataset_name = 'sampled_Home_and_Kitchen'
@@ -84,41 +97,36 @@ def main():
     valid_loader = DataLoader(valid_dataset, batch_size=Config.batch_size)
     test_loader = DataLoader(test_dataset, batch_size=Config.batch_size)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    device = torch.device(f"cuda:{rank}")
     model = CAMP(num_users, num_items, num_cats, Config).to(device)
-    if torch.cuda.device_count() > 1:
-        print(f"Let's use {torch.cuda.device_count()} GPUs!")
-        model = nn.DataParallel(model)
-        # print(f"Let's use 2 of the available GPUs!")
-        # model = nn.DataParallel(model, device_ids=[0, 1])
-        
-    # Define the optimizer
+    model = DDP(model, device_ids=[rank])        
     optimizer = Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
 
+    early_stopping = EarlyStopping(patience=10, verbose=True)
+
     print("Training......")
-    # Train and evaluate
     for epoch in range(Config.num_epochs):
+        print(f"Epoch {epoch} -------")
         train_loss = train(model, train_loader, optimizer, item_to_cat_dict, device)
         valid_loss, valid_accuracy = evaluate(model, valid_loader, item_to_cat_dict, device)
-        logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Valid Accuracy: {valid_accuracy}')
 
-    save_path = "../../model/"
-    os.makedirs(save_path, exist_ok=True)
-    model_filename = f"trained_model_{datetime.now().strftime('%Y-%m-%d')}.pt"
-    full_path = os.path.join(save_path, model_filename)
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'train_loss': train_loss,
-        'valid_loss': valid_loss,
-        'epoch': epoch,
-    }, full_path)
-    logging.info(f"Model and training states have been saved to {full_path}")
+         # 모델 저장 로직
+        if rank == 0:  
+            torch.save(model.state_dict(), f'../../model/checkpoint_epoch_{epoch}.pt')
 
-    # Evaluate on test set
-    average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, device, k = Config.k)
-    logging.info(f"Test Loss: {average_loss:.4f}, Precision@{Config.k}: {avg_precision:.4f}, Recall@{Config.k}: {avg_recall:.4f}, NDCG@{Config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{Config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+        early_stopping(valid_loss)  # Early Stopping 호출
+        if early_stopping.early_stop:
+            print("Early stopping triggered")
+            break
+    
+    if rank == 0:  
+        model.load_state_dict(torch.load(f'../../model/checkpoint_epoch_{epoch}.pt'))
+        model.eval()
+        average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, device, k=Config.k)
+        logging.info(f"Test Loss: {average_loss:.4f}, Precision@{Config.k}: {avg_precision:.4f}, Recall@{Config.k}: {avg_recall:.4f}, NDCG@{Config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{Config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+
+    cleanup()
 
 if __name__ == "__main__":
-    main()
+    n_gpus = torch.cuda.device_count()
+    spawn(main, args=(n_gpus,), nprocs=n_gpus)

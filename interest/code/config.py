@@ -13,7 +13,7 @@ class Config:
     hidden_dim = 256
     output_dim = 1
     num_epochs = 30
-    batch_size = 128
+    batch_size = 256
     
     data_preprocessed = True
     k = 20
