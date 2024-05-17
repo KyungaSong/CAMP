@@ -11,8 +11,13 @@ class ModulePopHistory(nn.Module):
         super(ModulePopHistory, self).__init__()
         self.config = config
         self.alpha = self.config.alpha
+        self.ema_cache = {}
+        self.sigmoid = nn.Sigmoid()
 
-    def ema(self, pop_history):
+    def ema(self, pop_history, item_id):
+        if item_id in self.ema_cache:
+            return self.ema_cache[item_id]
+
         alpha = self.alpha
         ema_all = torch.zeros_like(pop_history, dtype=torch.float)
         ema_all[:, 0] = pop_history[:, 0]
@@ -20,56 +25,57 @@ class ModulePopHistory(nn.Module):
         for t in range(1, pop_history.size(1)):
             ema_all[:, t] = (1 - alpha) * ema_all[:, t-1] + alpha * pop_history[:, t]
 
+        self.ema_cache[item_id] = ema_all
         return ema_all
 
-    def forward(self, pop_history):
-        history_ema = self.ema(pop_history)
-        return history_ema
+    def forward(self, pop_history, item_id, time):
+        history_ema = self.ema(pop_history, item_id)
+        time_before = time - 1
+        time_before_clamped = torch.clamp(time_before, min=0)
+        history_final = torch.gather(history_ema, 1, time_before_clamped.long().unsqueeze(1))
+        return self.sigmoid(history_final)
 
 class ModuleTime(nn.Module):
     def __init__(self, config: Config):
         super(ModuleTime, self).__init__()
         self.config = config
         self.fc_item_pop_value = nn.Linear(config.embedding_dim*4, 1)
-        self.relu = nn.ReLU()
+        self.relu = nn.LeakyReLU(0.01)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, item_embeds, time_release_embeds, time_embeds):
-        temporal_dis = time_release_embeds - time_embeds
-        item_temp_joint_embed = torch.cat((temporal_dis, item_embeds, time_embeds, time_release_embeds), 1)
-        joint_item_temp_value = self.relu(self.fc_item_pop_value(item_temp_joint_embed))
-        return joint_item_temp_value
+        temporal_gap = time_release_embeds - time_embeds
+        item_temp_joint_embed = torch.cat((temporal_gap, item_embeds, time_embeds, time_release_embeds), 1)
+        time_final = self.relu(self.fc_item_pop_value(item_temp_joint_embed))
+        return self.sigmoid(time_final)
 
 class ModuleSideInfo(nn.Module):
     def __init__(self, config: Config):
         super(ModuleSideInfo, self).__init__()
         self.config = config
-        self.avg_rating_fc = nn.Linear(1, config.embedding_dim)
         self.rating_number_fc = nn.Linear(1, config.embedding_dim)
-        self.fc_output = nn.Linear(4*config.embedding_dim, 1)
-        self.relu = nn.ReLU()
+        self.fc_output = nn.Linear(3 * config.embedding_dim, 1)
+        self.sigmoid = nn.Sigmoid()
 
-    def forward(self, avg_rating, rating_number, cat_embeds, store_embeds):
-        avg_rating = self.avg_rating_fc(avg_rating.view(-1, 1))
+    def forward(self, rating_number, cat_embeds, store_embeds):
         rating_number = self.rating_number_fc(rating_number.view(-1, 1))
-        cat_embeds = cat_embeds.mean(dim=1)
-        store_embeds = store_embeds.mean(dim=1)
-        embed_sideinfo = torch.cat((avg_rating, rating_number, cat_embeds, store_embeds), 1)
-        output = self.relu(self.fc_output(embed_sideinfo))
-        return output
+        embed_sideinfo = torch.cat((rating_number, cat_embeds, store_embeds), 1)    
+        embed_sideinfo = self.fc_output(embed_sideinfo)
+        return self.sigmoid(embed_sideinfo)
 
 class PopPredict(nn.Module):
-    def __init__(self, is_training, config: Config, num_items, max_time, num_cats, num_stores):
+    def __init__(self, is_training, config: Config, num_items, num_cats, num_stores, max_time):
         super(PopPredict, self).__init__()
 
         self.config = config
         self.is_training = is_training
-        self.embedding_dim = config.embedding_dim
+        self.embedding_dim = self.config.embedding_dim
 
         # Embedding layers
-        self.item_embedding = nn.Embedding(num_items, self.embedding_dim, padding_idx=0)
-        self.time_embedding = nn.Embedding(max_time + 1, self.embedding_dim)
-        self.cat_embedding = nn.Embedding(num_cats, self.embedding_dim, padding_idx=0)
+        self.item_embedding = nn.Embedding(num_items + 1, self.embedding_dim, padding_idx=0)        
+        self.cat_embedding = nn.Embedding(num_cats + 1, self.embedding_dim, padding_idx=0)
         self.store_embedding = nn.Embedding(num_stores, self.embedding_dim)
+        self.time_embedding = nn.Embedding(max_time + 1, self.embedding_dim)
 
         # Modules
         self.module_pop_history = ModulePopHistory(config=config)
@@ -92,7 +98,6 @@ class PopPredict(nn.Module):
         times = batch['time']
         release_times = batch['release_time']
         pop_histories = batch['pop_history']  
-        avg_ratings = batch['avg_rating']
         rating_numbers = batch['rating_number']
         categories = batch['category']
         stores = batch['store']
@@ -100,24 +105,24 @@ class PopPredict(nn.Module):
         item_embeds = self.item_embedding(item_ids)
         time_embeds = self.time_embedding(times)
         release_time_embeds = self.time_embedding(release_times)        
-        cat_embeds = self.cat_embedding(categories)        
+        cat_embeds = self.cat_embedding(categories)
         store_embeds = self.store_embedding(stores)
 
         # Module outputs
-        pop_history_output = self.module_pop_history(pop_histories)
+        # pop_history_output = self.module_pop_history(pop_histories)
+        pop_history_output = self.module_pop_history(pop_histories, item_ids, times)
         time_output = self.module_time(item_embeds, release_time_embeds, time_embeds)        
-        sideinfo_output = self.module_sideinfo(avg_ratings, rating_numbers, cat_embeds, store_embeds)
+        sideinfo_output = self.module_sideinfo(rating_numbers, cat_embeds, store_embeds)
+        # print(f'pop: {pop_history_output.size()}, time: {time_output.size()}, side: {sideinfo_output.size()}')
 
-        # # Concatenate module outputs without the periodic module
-        # pred_all = torch.cat((pop_history_output, time_output, sideinfo_output), 1)
+        # Concatenate module outputs without the periodic module
+        pred_all = torch.cat((pop_history_output, time_output, sideinfo_output), 1)
 
-        # # Apply attention weights (adjusted for 3 modules)
-        # normalized_weights = F.softmax(self.attention_weights, dim=0)
-        # output = torch.mm(pred_all, normalized_weights).squeeze()
+        # Apply attention weights (adjusted for 3 modules)
+        normalized_weights = F.softmax(self.attention_weights, dim=0)
+        output = torch.mm(pred_all, normalized_weights).squeeze()
 
-        # if not self.is_training:
-        #     print('Attention weights:', normalized_weights.data.cpu().numpy())
-
-        # return pop_history_output, time_output, sideinfo_output, output
-        print("sideinfo_output:\n", sideinfo_output[0])
-        return pop_history_output, time_output, sideinfo_output
+        if not self.is_training:
+            print('Attention weights:', normalized_weights.data.cpu().numpy())
+        return pop_history_output, time_output, sideinfo_output, output
+        

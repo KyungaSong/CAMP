@@ -10,8 +10,10 @@ class Config(object):
         self.lr = args.lr 
         self.time_unit = args.time_unit 
         self.pop_time_unit = args.pop_time_unit 
+        self.dataset = args.dataset
         self.data_preprocessed = args.data_preprocessed
         self.num_epochs = args.num_epochs
         self.embedding_dim = args.embedding_dim
+        
 
         
