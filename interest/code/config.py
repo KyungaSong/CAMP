@@ -1,19 +1,24 @@
-class Config:
-    time_unit = 60*60*24*1000 # a day
-    time_range = 30 * time_unit # a month
-    k_m = 3 * 12 * time_range # three year
-    k_s = 6 * time_range # six month
-    
-    train_num_samples = 4
-    valid_num_samples = 4
-    test_num_samples = 49
+class Config(object):
+    def __init__(self, args):        
+        self.lr = args.lr
+        self.num_epochs = args.num_epochs
+        self.batch_size = args.batch_size 
+        self.embedding_dim = args.embedding_dim
+        self.hidden_dim = args.hidden_dim
+        self.output_dim = args.output_dim
 
-    # Instantiate the model
-    embedding_dim = 128
-    hidden_dim = 256
-    output_dim = 1
-    num_epochs = 30
-    batch_size = 256
-    
-    data_preprocessed = True
-    k = 20
+        self.time_unit = 60*60*24*1000 # a day
+        self.time_range = 30 * self.time_unit # a month
+        self.k_m = args.k_m * self.time_range
+        self.k_s = args.k_s * self.time_range
+        self.k = args.k
+
+        self.train_num_samples = 4
+        self.valid_num_samples = 4
+        self.test_num_samples = 49
+
+        self.dataset = args.dataset
+        self.data_preprocessed = args.data_preprocessed
+        self.test_only = args.test_only
+
+        

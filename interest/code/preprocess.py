@@ -7,6 +7,8 @@ import torch
 from torch.utils.data import Dataset
 
 from tqdm.auto import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import cpu_count
 
 def load_dataset(file_path, meta = False):
     with open(file_path, 'rb') as file:
@@ -60,12 +62,20 @@ def generate_negative_samples_cached(all_item_ids, positive_item_id, history_tup
     neg_samples = random.sample(non_interacted_items, min(num_samples, len(non_interacted_items)))
     return neg_samples
 
+def generate_negative_samples_for_row(args):
+    all_item_ids, item_encoded, item_his_encoded, num_samples = args
+    return generate_negative_samples_cached(
+        frozenset(all_item_ids),
+        item_encoded,
+        tuple(item_his_encoded),
+        num_samples
+    )
+
 def preprocess_df(df, Config):     
     df['user_encoded'] = encode_column(df['user_id'])
     df['item_encoded'] = encode_column(df['item_id'], pad = True)
     df['cat_encoded'] = encode_column(df['category'], pad = True)
     item_to_cat_dict = dict(zip(df['item_encoded'], df['cat_encoded']))
-    print("df\n", df)
     max_item_id = df['item_encoded'].max()
     all_item_ids = set(range(1, max_item_id + 1))
 
@@ -91,36 +101,19 @@ def preprocess_df(df, Config):
     valid_df = df.groupby('user_id').apply(lambda x: x.iloc[-2:-1], include_groups=False).reset_index(drop=True)
     test_df = df.groupby('user_id').apply(lambda x: x.iloc[-1:], include_groups=False).reset_index(drop=True)       
 
-    print('Making negative candidates start')
-    
-    # train_df['can_neg'] = train_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded']), axis=1)
-    # print('train df end')    
-    # valid_df['can_neg'] = valid_df.apply(lambda x: generate_negative_samples(all_item_ids, x['item_encoded'], x['item_his_encoded']), axis=1)
-    # print('train df end') 
-    # test_df['can_neg'] = test_df.apply(lambda x: generate_negative_samples(all_item_ids, None, x['item_his_encoded']), axis=1)
-    # print('test df end')
-    tqdm.pandas(desc="Generating negative samples for training dataset")
-    train_df['neg_items'] = train_df.progress_apply(
-    lambda x: generate_negative_samples_cached(
-        frozenset(all_item_ids), 
-        x['item_encoded'], 
-        tuple(x['item_his_encoded']), 
-        num_samples= Config.train_num_samples
-    ), axis=1)
-    tqdm.pandas(desc="Generating negative samples for valid dataset")
-    valid_df['neg_items'] = valid_df.progress_apply(lambda x: generate_negative_samples_cached(
-        frozenset(all_item_ids), 
-        x['item_encoded'], 
-        tuple(x['item_his_encoded']), 
-        num_samples = Config.valid_num_samples
-    ), axis=1)
-    tqdm.pandas(desc="Generating negative samples for test dataset")
-    test_df['neg_items'] = test_df.progress_apply(lambda x: generate_negative_samples_cached(
-        frozenset(all_item_ids), 
-        x['item_encoded'], 
-        tuple(x['item_his_encoded']), 
-        num_samples = Config.test_num_samples
-    ), axis=1)
+    print('Making negative candidates start')    
+    def parallel_generate_negative_samples(df, all_item_ids, num_samples):
+        num_threads = min(cpu_count(), 4)
+        futures = []
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            for row in tqdm(df.itertuples(index=False), total=len(df), desc="Generating negative samples"):
+                futures.append(executor.submit(generate_negative_samples_for_row, (all_item_ids, row.item_encoded, row.item_his_encoded, num_samples)))
+            neg_items = [future.result() for future in as_completed(futures)]
+        return neg_items
+
+    train_df['neg_items'] = parallel_generate_negative_samples(train_df, all_item_ids, Config.train_num_samples)
+    valid_df['neg_items'] = parallel_generate_negative_samples(valid_df, all_item_ids, Config.valid_num_samples)
+    test_df['neg_items'] = parallel_generate_negative_samples(test_df, all_item_ids, Config.test_num_samples)
     test_df['neg_items'] = test_df['neg_items'] + test_df['item_encoded'].apply(lambda x: [x])
     print('Making negative candidates end')
     return train_df, valid_df, test_df, item_to_cat_dict

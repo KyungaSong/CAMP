@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import random
-
 class LongTermInterestModule(nn.Module):
     def __init__(self, embedding_dim):
         super(LongTermInterestModule, self).__init__()
@@ -164,6 +162,7 @@ def bpr_loss(a, positive, negative):
     return F.softplus(neg_score - pos_score)
 
 def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s):
+# def calculate_contrastive_loss(z_l, z_m, p_l, p_m):
     """
     Calculate the overall contrastive loss L_con for a user at time t,
     which is the sum of L_lm (long-mid term contrastive loss) and L_ms (mid-short term contrastive loss).
@@ -178,6 +177,7 @@ def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s):
     
     # Overall contrastive loss
     L_con = L_lm + L_ms
+    # L_con = L_lm 
     return L_con
 
 class InterestFusionModule(nn.Module):
@@ -209,6 +209,7 @@ class InterestFusionModule(nn.Module):
         )
     
     def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds):
+    # def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, item_embeds, cat_embeds):
         # Combine item and category history embeddings
         combined_history_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
         
@@ -230,6 +231,7 @@ class InterestFusionModule(nn.Module):
 
         # Interest representation
         z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
+        # z_t = alpha_l * z_l + (1 - alpha_l) * z_m
         y_int = self.mlp_pred(torch.cat((z_t, item_embeds, cat_embeds), dim=1))
 
         return y_int
@@ -264,8 +266,9 @@ class CAMP(nn.Module):
         item_ids = batch['item']
         cat_ids = batch['cat']
         items_history_padded = batch['item_his']        
-        cats_history_padded = batch['cat_his']        
-        mid_lens = batch['mid_len']
+        cats_history_padded = batch['cat_his']  
+        # mid_lens = batch['short_len']      
+        mid_lens = batch['mid_len']        
         short_lens = batch['short_len']
         neg_items_ids = batch['neg_items']
         neg_cats_ids = torch.tensor([[item_to_cat_dict[item.item()] for item in neg_items] for neg_items in neg_items_ids], device=device)
@@ -286,12 +289,18 @@ class CAMP(nn.Module):
         p_m = mid_term_interest_proxy(item_his_embeds, cat_his_embeds, mid_lens)
         p_s = short_term_interest_proxy(item_his_embeds, cat_his_embeds, short_lens)
         loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s)
+        # loss_con = calculate_contrastive_loss(z_l, z_m, p_l, p_m)
 
-        y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds)        
+        y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds)     
         y_int_negs = torch.stack([
             self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1), cat_embed.squeeze(1))
             for neg_embed, cat_embed in zip(neg_items_embeds.split(1, dim=1), neg_cats_embeds.split(1, dim=1))
-        ], dim=1).squeeze(2)
+        ], dim=1).squeeze(2) 
+        # y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, item_embeds, cat_embeds)     
+        # y_int_negs = torch.stack([
+        #     self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, neg_embed.squeeze(1), cat_embed.squeeze(1))
+        #     for neg_embed, cat_embed in zip(neg_items_embeds.split(1, dim=1), neg_cats_embeds.split(1, dim=1))
+        # ], dim=1).squeeze(2)
         loss_bce_pos = self.bce_loss_module(y_int_pos, torch.ones_like(y_int_pos))
         loss_bce_neg = self.bce_loss_module(y_int_negs, torch.zeros_like(y_int_negs))
         loss_bce = loss_bce_pos + loss_bce_neg

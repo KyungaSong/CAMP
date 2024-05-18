@@ -1,8 +1,9 @@
 import numpy as np
+from tqdm import tqdm
 import torch
 import torch.optim as optim
-from torch.nn.utils import clip_grad_norm_
-from tqdm import tqdm
+from torch.profiler import profile, record_function, ProfilerActivity
+
 from evaluate import precision_at_k, recall_at_k, ndcg_at_k, hit_rate_at_k
 from sklearn.metrics import roc_auc_score
 
@@ -12,11 +13,9 @@ def train(model, data_loader, optimizer, item_to_cat_dict, device):
     for batch in tqdm(data_loader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
-
+        
         loss, _, _ = model(batch, item_to_cat_dict, device)
         loss = loss.mean()  
-        total_loss += loss.item()
-
         loss.backward()
         optimizer.step()
 
