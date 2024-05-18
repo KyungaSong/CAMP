@@ -22,11 +22,11 @@ def train(model, data_loader, optimizer, device, rank):
 
         target_index = batch['time'].long().unsqueeze(1) 
         pop_gt = torch.gather(batch['pop_history'], 1, target_index).squeeze().float()
-        qlt_gt = batch['avg_rating'] / 5.0
+        # qlt_gt = batch['avg_rating'] / 5.0
 
-        loss_p = criteria(output.squeeze(), pop_gt)
-        loss_q = criteria(sideinfo_output.squeeze(), qlt_gt)
-        loss = loss_p + loss_q
+        loss = criteria(output.squeeze(), pop_gt)
+        # loss_q = criteria(sideinfo_output.squeeze(), qlt_gt)
+        # loss = loss_p + loss_q
 
         loss.backward()
         optimizer.step()
@@ -55,11 +55,12 @@ def evaluate(model, data_loader, device, rank):
             
             target_index = batch['time'].long().unsqueeze(1) 
             pop_gt = torch.gather(batch['pop_history'], 1, target_index).squeeze().float()
-            qlt_gt = batch['avg_rating'] / 5.0
+            # qlt_gt = batch['avg_rating'] / 5.0
 
-            loss_p = criteria(output.squeeze(), pop_gt)
-            loss_q = criteria(sideinfo_output.squeeze(), qlt_gt)
-            loss = loss_p + loss_q
+            # loss_p = criteria(output.squeeze(), pop_gt)
+            # loss_q = criteria(sideinfo_output.squeeze(), qlt_gt)
+            # loss = loss_p + loss_q
+            loss = criteria(output.squeeze(), pop_gt)
 
             total_loss += loss.item() 
 
@@ -87,11 +88,12 @@ def test(model, data_loader, device, rank):
 
             target_index = batch['time'].long().unsqueeze(1)
             pop_gt = torch.gather(batch['pop_history'], 1, target_index).squeeze().float()
-            qlt_gt = batch['avg_rating'] / 5.0
+            # qlt_gt = batch['avg_rating'] / 5.0
 
-            loss_p = criteria(output.squeeze(), pop_gt)
-            loss_q = criteria(sideinfo_output.squeeze(), qlt_gt)
-            loss = loss_p + loss_q
+            # loss_p = criteria(output.squeeze(), pop_gt)
+            # loss_q = criteria(sideinfo_output.squeeze(), qlt_gt)
+            # loss = loss_p + loss_q
+            loss = criteria(output.squeeze(), pop_gt)
 
             total_loss += loss.item()
 

@@ -33,7 +33,8 @@ class ModulePopHistory(nn.Module):
         time_before = time - 1
         time_before_clamped = torch.clamp(time_before, min=0)
         history_final = torch.gather(history_ema, 1, time_before_clamped.long().unsqueeze(1))
-        return self.sigmoid(history_final)
+        # return self.sigmoid(history_final)
+        return history_final
 
 class ModuleTime(nn.Module):
     def __init__(self, config: Config):
@@ -47,7 +48,8 @@ class ModuleTime(nn.Module):
         temporal_gap = time_release_embeds - time_embeds
         item_temp_joint_embed = torch.cat((temporal_gap, item_embeds, time_embeds, time_release_embeds), 1)
         time_final = self.relu(self.fc_item_pop_value(item_temp_joint_embed))
-        return self.sigmoid(time_final)
+        # return self.sigmoid(time_final)
+        return time_final
 
 class ModuleSideInfo(nn.Module):
     def __init__(self, config: Config):
@@ -61,7 +63,8 @@ class ModuleSideInfo(nn.Module):
         rating_number = self.rating_number_fc(rating_number.view(-1, 1))
         embed_sideinfo = torch.cat((rating_number, cat_embeds, store_embeds), 1)    
         embed_sideinfo = self.fc_output(embed_sideinfo)
-        return self.sigmoid(embed_sideinfo)
+        # return self.sigmoid(embed_sideinfo)
+        return embed_sideinfo
 
 class PopPredict(nn.Module):
     def __init__(self, is_training, config: Config, num_items, num_cats, num_stores, max_time):

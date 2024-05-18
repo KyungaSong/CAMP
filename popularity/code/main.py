@@ -150,7 +150,7 @@ def main(rank, world_size, use_cuda):
         valid_loss = evaluate(model, valid_loader, device, rank)        
 
         if rank == 0:
-            print(f"Average Train Loss: {train_loss:.4f}, Average Validation Loss: {valid_loss:.4f}")  
+            print(f"Epoch {epoch+1}>>> Average Train Loss: {train_loss:.4f}, Average Validation Loss: {valid_loss:.4f}")  
             logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
             torch.save(model.state_dict(), f'../../model/pop/{dataset_name}_checkpoint_epoch_{epoch}.pt')
 
@@ -165,6 +165,7 @@ def main(rank, world_size, use_cuda):
         average_loss, average_rmse = test(model, test_loader, device, rank)
         print(f"Average Test Loss: {average_loss:.4f}, Average Test RMSE: {average_rmse:.4f}")
         logging.info(f'Average Test Loss: {average_loss:.4f}, Average Test RMSE: {average_rmse:.4f}')
+    cleanup()
 
 
 if __name__ == "__main__":
