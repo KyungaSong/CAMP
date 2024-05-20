@@ -12,6 +12,7 @@ class Config(object):
         self.pop_time_unit = args.pop_time_unit 
         self.dataset = args.dataset
         self.data_preprocessed = args.data_preprocessed
+        self.test_only = args.test_only
         self.num_epochs = args.num_epochs
         self.embedding_dim = args.embedding_dim
         
