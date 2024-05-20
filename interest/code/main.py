@@ -54,13 +54,23 @@ parser.add_argument("--data_preprocessed", type=bool, default=False,
 parser.add_argument("--test_only", type=bool, default=False,
                     help="flag to indicate if only testing should be performed")
 
+parser.add_argument('--discrepancy_loss_weight', type=float, default =0.01, 
+                    help='Loss weight for discrepancy between long and short term user embedding.')
+parser.add_argument('--regularization_weight', type=float, default =0.0001, 
+                    help='weight for L2 regularization applied to model parameters')
+
+parser.add_argument('--has_mid', type=bool, default =True, 
+                    help='flag to indicate if model has mid-term module')
+ 
+
 args = parser.parse_args()
 config = Config(args=args)
 
 def setup(rank, world_size, use_cuda):
     if use_cuda:
+        os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
         os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '12356'
+        os.environ['MASTER_PORT'] = '12355'
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
@@ -90,18 +100,18 @@ def load_data(dataset_name):
         num_cats = combined_df['cat_encoded'].nunique()
         item_to_cat_dict = dict(zip(combined_df['item_encoded'], combined_df['cat_encoded']))
         print("Processed files already exist. Skipping dataset preparation.")
+        print(f'df: {len(combined_df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
     else:
         try:
-            start_time = time.time()
             df = load_dataset(review_file_path)
             df_meta = load_dataset(meta_file_path, meta=True)
 
             num_users = df['user_id'].nunique()
             num_items = df['item_id'].nunique()
             num_cats = df_meta['category'].nunique()
-            print(f'num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
+            print(f'df: {len(df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
             df = pd.merge(df, df_meta, on='item_id', how='left')
-            train_df, valid_df, test_df, item_to_cat_dict = preprocess_df(df, Config)
+            train_df, valid_df, test_df, item_to_cat_dict = preprocess_df(df, config)
 
             if not os.path.exists(processed_path):
                 os.makedirs(processed_path)
@@ -109,9 +119,6 @@ def load_data(dataset_name):
             train_df.to_pickle(f'{processed_path}/train_df_{date_str}_{num_users}_{num_items}.pkl')
             valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}_{num_users}_{num_items}.pkl')
             test_df.to_pickle(f'{processed_path}/test_df_{date_str}_{num_users}_{num_items}.pkl')
-
-            end_time = time.time()
-            logging.info(f"Dataset prepared in {end_time - start_time:.2f} seconds")
         except Exception as e:
             logging.error(f"Error during data preparation: {str(e)}")
             raise
@@ -138,7 +145,7 @@ def main(rank, world_size, use_cuda):
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, sampler=test_sampler)
 
     device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
-    model = CAMP(num_users, num_items, num_cats, Config).to(device)
+    model = CAMP(num_users, num_items, num_cats, config).to(device)
     model = DDP(model, device_ids=[rank]) if use_cuda else model    
 
     if not config.test_only:
@@ -163,7 +170,7 @@ def main(rank, world_size, use_cuda):
 
     if rank == 0 and use_cuda:
         for i in range(config.num_epochs):
-            latest_checkpoint = f'../../model/checkpoint_epoch_{i}.pt'
+            latest_checkpoint = f'../../model/{dataset_name}_checkpoint_epoch_{i}.pt'
             model.load_state_dict(torch.load(latest_checkpoint))
             model.eval()
             average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, device, k=config.k)
@@ -172,7 +179,8 @@ def main(rank, world_size, use_cuda):
     cleanup()
 
 if __name__ == "__main__":
-    n_gpus = torch.cuda.device_count()
+    # n_gpus = torch.cuda.device_count()
+    n_gpus = 3
     if n_gpus > 0:
         print(f"Let's use {n_gpus} GPUs!")
         spawn(main, args=(n_gpus, True), nprocs=n_gpus)

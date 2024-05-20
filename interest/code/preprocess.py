@@ -10,6 +10,8 @@ from tqdm.auto import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
+tqdm.pandas()
+
 def load_dataset(file_path, meta = False):
     with open(file_path, 'rb') as file:
         df = pickle.load(file) 
@@ -55,15 +57,17 @@ def generate_negative_samples(all_item_ids, positive_item_id, history):
     non_interacted_items = list(all_item_ids - set(history) - {positive_item_id})
     return non_interacted_items
 
-@lru_cache(maxsize=1024)  
+@lru_cache(maxsize=1024)
 def generate_negative_samples_cached(all_item_ids, positive_item_id, history_tuple, num_samples=4):
-    history = set(history_tuple)  
+    history = set(history_tuple)
     non_interacted_items = list(all_item_ids - history - {positive_item_id})
-    neg_samples = random.sample(non_interacted_items, min(num_samples, len(non_interacted_items)))
+    if len(non_interacted_items) >= num_samples:
+        neg_samples = random.sample(non_interacted_items, num_samples)
+    else:
+        neg_samples = non_interacted_items
     return neg_samples
 
-def generate_negative_samples_for_row(args):
-    all_item_ids, item_encoded, item_his_encoded, num_samples = args
+def generate_negative_samples_for_row(all_item_ids, item_encoded, item_his_encoded, num_samples):
     return generate_negative_samples_cached(
         frozenset(all_item_ids),
         item_encoded,
@@ -71,7 +75,48 @@ def generate_negative_samples_for_row(args):
         num_samples
     )
 
-def preprocess_df(df, Config):     
+def parallel_generate_negative_samples(df, all_item_ids, num_samples):
+    num_threads = min(cpu_count(), 4)
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = {
+            executor.submit(generate_negative_samples_for_row, all_item_ids, row.item_encoded, row.item_his_encoded, num_samples): row.Index
+            for row in df.itertuples()
+        }
+        neg_samples = {}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating negative samples"):
+            neg_samples[futures[future]] = future.result()
+    return [neg_samples[idx] for idx in range(len(df))]
+
+def generate_negative_samples_vectorized(df, all_item_ids, num_samples):
+    all_item_ids = np.array(list(all_item_ids))
+
+    # Create an array for negative samples
+    neg_samples = np.zeros((len(df), num_samples), dtype=np.int32)
+
+    # Get the positive items and their histories
+    positive_items = df['item_encoded'].values
+    histories = df['item_his_encoded_set'].values
+
+    # Vectorized negative sampling
+    for idx in tqdm(range(len(df)), desc="Generating negative samples"):
+        item_his_set = histories[idx]
+        positive_item_id = positive_items[idx]
+
+        # Get the non-interacted items
+        mask = np.isin(all_item_ids, list(item_his_set) + [positive_item_id], invert=True)
+        non_interacted_items = all_item_ids[mask]
+
+        # Sample negative items
+        if len(non_interacted_items) >= num_samples:
+            sampled_items = np.random.choice(non_interacted_items, num_samples, replace=False)
+        else:
+            sampled_items = non_interacted_items
+
+        neg_samples[idx, :len(sampled_items)] = sampled_items
+
+    return neg_samples.tolist()
+
+def preprocess_df(df, config):     
     df['user_encoded'] = encode_column(df['user_id'])
     df['item_encoded'] = encode_column(df['item_id'], pad = True)
     df['cat_encoded'] = encode_column(df['category'], pad = True)
@@ -80,19 +125,23 @@ def preprocess_df(df, Config):
     all_item_ids = set(range(1, max_item_id + 1))
 
     min_time_all = df['timestamp'].min()
-    df['unit_time'] = (df['timestamp'] - min_time_all) // Config.time_range
+    df['unit_time'] = (df['timestamp'] - min_time_all) // config.time_range
 
     df['item_his_encoded'] = df.groupby('user_id')['item_encoded'].transform(get_history) 
     df['cat_his_encoded'] = df.groupby('user_id')['cat_encoded'].transform(get_history) 
 
+    # Precompute item_his_encoded as sets and tuples
+    df['item_his_encoded_set'] = df['item_his_encoded'].apply(set)
+    df['item_his_encoded_tuple'] = df['item_his_encoded'].apply(tuple)
+
     print('calculate ranges start')
-    ranges_df = df.groupby('user_id', group_keys=False).apply(lambda x: calculate_ranges(x, Config.k_m, Config.k_s), include_groups=False)
+    ranges_df = df.groupby('user_id', group_keys=False).apply(lambda x: calculate_ranges(x, config.k_m, config.k_s), include_groups=False)
     df.reset_index(drop=True, inplace=True)
     ranges_df.reset_index(drop=True, inplace=True)
     df = pd.concat([df, ranges_df], axis=1) 
     print('calculate ranges end')
 
-    df = df[['user_id', 'user_encoded', 'item_encoded', 'cat_encoded', 'item_his_encoded', 'cat_his_encoded', 'unit_time', 'mid_len', 'short_len']]
+    df = df[['user_id', 'user_encoded', 'item_encoded', 'cat_encoded', 'item_his_encoded', 'item_his_encoded_set', 'item_his_encoded_tuple', 'cat_his_encoded', 'unit_time', 'mid_len', 'short_len']]
     # df['item_his_encoded_set'] = df['item_his_encoded'].apply(set)
     print("df:\n", df)
     
@@ -101,21 +150,20 @@ def preprocess_df(df, Config):
     valid_df = df.groupby('user_id').apply(lambda x: x.iloc[-2:-1], include_groups=False).reset_index(drop=True)
     test_df = df.groupby('user_id').apply(lambda x: x.iloc[-1:], include_groups=False).reset_index(drop=True)       
 
-    print('Making negative candidates start')    
-    def parallel_generate_negative_samples(df, all_item_ids, num_samples):
-        num_threads = min(cpu_count(), 4)
-        futures = []
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            for row in tqdm(df.itertuples(index=False), total=len(df), desc="Generating negative samples"):
-                futures.append(executor.submit(generate_negative_samples_for_row, (all_item_ids, row.item_encoded, row.item_his_encoded, num_samples)))
-            neg_items = [future.result() for future in as_completed(futures)]
-        return neg_items
+    # print('Making negative sample start')    
+    # train_df['neg_items'] = train_df.progress_apply(lambda row: generate_negative_samples_for_row(all_item_ids, row.item_encoded, row.item_his_encoded, config.train_num_samples), axis=1)
+    # valid_df['neg_items'] = valid_df.progress_apply(lambda row: generate_negative_samples_for_row(all_item_ids, row.item_encoded, row.item_his_encoded, config.valid_num_samples), axis=1)
+    # test_df['neg_items'] = test_df.progress_apply(lambda row: generate_negative_samples_for_row(all_item_ids, row.item_encoded, row.item_his_encoded, config.test_num_samples), axis=1)
 
-    train_df['neg_items'] = parallel_generate_negative_samples(train_df, all_item_ids, Config.train_num_samples)
-    valid_df['neg_items'] = parallel_generate_negative_samples(valid_df, all_item_ids, Config.valid_num_samples)
-    test_df['neg_items'] = parallel_generate_negative_samples(test_df, all_item_ids, Config.test_num_samples)
+    # test_df['neg_items'] = test_df['neg_items'] + test_df['item_encoded'].apply(lambda x: [x])
+    # print('Making negative sample end')
+
+    print('Making negative sample start')    
+    train_df['neg_items'] = generate_negative_samples_vectorized(train_df, all_item_ids, config.train_num_samples)
+    valid_df['neg_items'] = generate_negative_samples_vectorized(valid_df, all_item_ids, config.valid_num_samples)
+    test_df['neg_items'] = generate_negative_samples_vectorized(test_df, all_item_ids, config.test_num_samples)
     test_df['neg_items'] = test_df['neg_items'] + test_df['item_encoded'].apply(lambda x: [x])
-    print('Making negative candidates end')
+    print('Making negative sample end')
     return train_df, valid_df, test_df, item_to_cat_dict
 
 class MakeDataset(Dataset):

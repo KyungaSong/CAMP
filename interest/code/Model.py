@@ -161,8 +161,7 @@ def bpr_loss(a, positive, negative):
     neg_score = torch.sum(a * negative, dim=1)
     return F.softplus(neg_score - pos_score)
 
-def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s):
-# def calculate_contrastive_loss(z_l, z_m, p_l, p_m):
+def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, has_mid):
     """
     Calculate the overall contrastive loss L_con for a user at time t,
     which is the sum of L_lm (long-mid term contrastive loss) and L_ms (mid-short term contrastive loss).
@@ -171,14 +170,22 @@ def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s):
     L_lm = bpr_loss(z_l, p_l, p_m) + bpr_loss(p_l, z_l, z_m) + \
            bpr_loss(z_m, p_m, p_l) + bpr_loss(p_m, z_m, z_l)
     
+    if has_mid:
     # Loss for the mid-term and short-term interests pair
-    L_ms = bpr_loss(z_m, p_m, p_s) + bpr_loss(p_m, z_m, z_s) + \
-           bpr_loss(z_s, p_s, p_m) + bpr_loss(p_s, z_s, z_m)
-    
-    # Overall contrastive loss
-    L_con = L_lm + L_ms
-    # L_con = L_lm 
+        L_ms = bpr_loss(z_m, p_m, p_s) + bpr_loss(p_m, z_m, z_s) + \
+            bpr_loss(z_s, p_s, p_m) + bpr_loss(p_s, z_s, z_m)
+        L_con = L_lm + L_ms
+    else:
+        L_con = L_lm 
     return L_con
+
+def compute_discrepancy_loss(a, b, discrepancy_loss_weight):
+    """
+    Calculate the discrepancy loss between two embeddings a and b.
+    """
+    discrepancy_loss = F.mse_loss(a, b)
+    discrepancy_loss = -discrepancy_loss_weight * discrepancy_loss
+    return discrepancy_loss
 
 class InterestFusionModule(nn.Module):
     def __init__(self, embedding_dim, hidden_dim, output_dim):
@@ -208,8 +215,7 @@ class InterestFusionModule(nn.Module):
             nn.Sigmoid()
         )
     
-    def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds):
-    # def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, item_embeds, cat_embeds):
+    def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, has_mid):
         # Combine item and category history embeddings
         combined_history_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
         
@@ -218,48 +224,50 @@ class InterestFusionModule(nn.Module):
         h_l = h_l[:, -1, :]  
 
         # Mid-term history feature extraction
-        batch_size, seq_len, _ = combined_history_embeds.size()     
-        masks = torch.arange(seq_len, device=mid_lens.device).expand(batch_size, seq_len) >= (seq_len - mid_lens.unsqueeze(1))   
-        masked_embeddings = combined_history_embeds * masks.unsqueeze(-1).float()
+        if has_mid:
+            batch_size, seq_len, _ = combined_history_embeds.size()     
+            masks = torch.arange(seq_len, device=mid_lens.device).expand(batch_size, seq_len) >= (seq_len - mid_lens.unsqueeze(1))   
+            masked_embeddings = combined_history_embeds * masks.unsqueeze(-1).float()
 
-        h_m, _ = self.gru_m(masked_embeddings)
-        h_m = h_m[:, -1, :] 
+            h_m, _ = self.gru_m(masked_embeddings)
+            h_m = h_m[:, -1, :] 
 
         # Attention weights
         alpha_l = self.mlp_alpha_l(torch.cat((h_l, z_l, z_m), dim=1))
-        alpha_m = self.mlp_alpha_m(torch.cat((h_m, z_m, z_s), dim=1))
+        if has_mid:
+            alpha_m = self.mlp_alpha_m(torch.cat((h_m, z_m, z_s), dim=1))
 
         # Interest representation
-        z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
-        # z_t = alpha_l * z_l + (1 - alpha_l) * z_m
+        if has_mid:
+            z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
+        else:
+            z_t = alpha_l * z_l + (1 - alpha_l) * z_m 
         y_int = self.mlp_pred(torch.cat((z_t, item_embeds, cat_embeds), dim=1))
 
         return y_int
 
 class BCELossModule(nn.Module):
-    def __init__(self):
+    def __init__(self, pos_weight):
         super(BCELossModule, self).__init__()
-        self.loss_fn = nn.BCELoss()
+        self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     def forward(self, y_pred, y_true):
-        """
-        Calculate the Binary Cross-Entropy Loss.
-        y_pred: Predicted labels for positive classes.
-        y_true: True labels.
-        """
         return self.loss_fn(y_pred, y_true)
-    
+
 class CAMP(nn.Module):
-    def __init__(self, num_users, num_items, num_cats, Config):
+    def __init__(self, num_users, num_items, num_cats, config):
         super(CAMP, self).__init__()
-        self.user_embedding = nn.Embedding(num_users, Config.embedding_dim)
-        self.item_embedding = nn.Embedding(num_items + 1, Config.embedding_dim, padding_idx=0)
-        self.cat_embedding = nn.Embedding(num_cats + 1, Config.embedding_dim, padding_idx=0)
-        self.long_term_module = LongTermInterestModule(Config.embedding_dim)
-        self.mid_term_module = MidTermInterestModule(Config.embedding_dim, Config.hidden_dim)
-        self.short_term_module = ShortTermInterestModule(Config.embedding_dim, Config.hidden_dim)
-        self.interest_fusion_module = InterestFusionModule(Config.embedding_dim, Config.hidden_dim, Config.output_dim)
-        self.bce_loss_module = BCELossModule()
+        self.user_embedding = nn.Embedding(num_users, config.embedding_dim)
+        self.item_embedding = nn.Embedding(num_items + 1, config.embedding_dim, padding_idx=0)
+        self.cat_embedding = nn.Embedding(num_cats + 1, config.embedding_dim, padding_idx=0)
+        self.long_term_module = LongTermInterestModule(config.embedding_dim)
+        self.mid_term_module = MidTermInterestModule(config.embedding_dim, config.hidden_dim)
+        self.short_term_module = ShortTermInterestModule(config.embedding_dim, config.hidden_dim)
+        self.interest_fusion_module = InterestFusionModule(config.embedding_dim, config.hidden_dim, config.output_dim)
+        self.bce_loss_module = BCELossModule(pos_weight=torch.tensor([4.0]))
+        self.regularization_weight = config.regularization_weight
+        self.discrepancy_loss_weight = config.discrepancy_loss_weight
+        self.has_mid = config.has_mid
 
     def forward(self, batch, item_to_cat_dict, device):
         user_ids = batch['user']
@@ -267,8 +275,10 @@ class CAMP(nn.Module):
         cat_ids = batch['cat']
         items_history_padded = batch['item_his']        
         cats_history_padded = batch['cat_his']  
-        # mid_lens = batch['short_len']      
-        mid_lens = batch['mid_len']        
+        if self.has_mid:
+            mid_lens = batch['mid_len']   
+        else:
+            mid_lens = batch['short_len'] 
         short_lens = batch['short_len']
         neg_items_ids = batch['neg_items']
         neg_cats_ids = torch.tensor([[item_to_cat_dict[item.item()] for item in neg_items] for neg_items in neg_items_ids], device=device)
@@ -289,21 +299,24 @@ class CAMP(nn.Module):
         p_m = mid_term_interest_proxy(item_his_embeds, cat_his_embeds, mid_lens)
         p_s = short_term_interest_proxy(item_his_embeds, cat_his_embeds, short_lens)
         loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s)
-        # loss_con = calculate_contrastive_loss(z_l, z_m, p_l, p_m)
 
         y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds)     
         y_int_negs = torch.stack([
             self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1), cat_embed.squeeze(1))
             for neg_embed, cat_embed in zip(neg_items_embeds.split(1, dim=1), neg_cats_embeds.split(1, dim=1))
         ], dim=1).squeeze(2) 
-        # y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, item_embeds, cat_embeds)     
-        # y_int_negs = torch.stack([
-        #     self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, neg_embed.squeeze(1), cat_embed.squeeze(1))
-        #     for neg_embed, cat_embed in zip(neg_items_embeds.split(1, dim=1), neg_cats_embeds.split(1, dim=1))
-        # ], dim=1).squeeze(2)
+
         loss_bce_pos = self.bce_loss_module(y_int_pos, torch.ones_like(y_int_pos))
         loss_bce_neg = self.bce_loss_module(y_int_negs, torch.zeros_like(y_int_negs))
         loss_bce = loss_bce_pos + loss_bce_neg
 
-        loss = loss_con + loss_bce
+        loss_discrepancy = compute_discrepancy_loss(z_l, z_m, self.discrepancy_loss_weight)
+        if self.has_mid:
+            loss_discrepancy_ms = compute_discrepancy_loss(z_m, z_s, self.discrepancy_loss_weight)
+            loss_discrepancy += loss_discrepancy_ms
+
+        # Regularization loss (L2 loss)
+        regularization_loss = self.regularization_weight * sum(torch.norm(param) for param in self.parameters())
+
+        loss = loss_con + loss_bce + loss_discrepancy + regularization_loss
         return loss, y_int_pos, y_int_negs

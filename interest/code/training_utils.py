@@ -2,15 +2,20 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.optim as optim
-from torch.profiler import profile, record_function, ProfilerActivity
 
 from evaluate import precision_at_k, recall_at_k, ndcg_at_k, hit_rate_at_k
 from sklearn.metrics import roc_auc_score
 
-def train(model, data_loader, optimizer, item_to_cat_dict, device):
+def train(model, data_loader, optimizer, item_to_cat_dict, device, rank):
     model.train()
     total_loss = 0
-    for batch in tqdm(data_loader, desc="Training"):
+
+    if rank == 0:
+        pbar = tqdm(data_loader, desc="Training")
+    else:
+        pbar = data_loader
+
+    for batch in pbar:
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
         
@@ -24,14 +29,19 @@ def train(model, data_loader, optimizer, item_to_cat_dict, device):
     return average_loss
 
 # 3) Evaluating
-def evaluate(model, data_loader, item_to_cat_dict, device):
+def evaluate(model, data_loader, item_to_cat_dict, device, rank):
     model.eval()
     total_loss = 0
     correct_predictions = 0
     total_predictions = 0
 
+    if rank == 0:
+        pbar = tqdm(data_loader, desc="Evaluating")
+    else:
+        pbar = data_loader
+
     with torch.no_grad():
-        for batch in tqdm(data_loader, desc="Evaluating"):
+        for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items()}
 
             loss, y_int_pos, y_int_negs = model(batch, item_to_cat_dict, device)
@@ -50,7 +60,7 @@ def evaluate(model, data_loader, item_to_cat_dict, device):
     return average_loss, accuracy
 
 # 4) Testing
-def test(model, data_loader, item_to_cat_dict, device, k=10):
+def test(model, data_loader, item_to_cat_dict, device, rank, k=10):
     model.eval()  
     total_loss = 0
     all_top_k_items = []
@@ -63,8 +73,13 @@ def test(model, data_loader, item_to_cat_dict, device, k=10):
     auc_scores = []
     mrr_scores = []
     
-    with torch.no_grad():  
-        for batch in tqdm(data_loader, desc="Testing"):
+    if rank == 0:
+        pbar = tqdm(data_loader, desc="Testing")
+    else:
+        pbar = data_loader
+
+    with torch.no_grad():
+        for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items()}
             
             loss, y_int_pos, y_int_negs = model(batch, item_to_cat_dict, device)

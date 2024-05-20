@@ -21,4 +21,8 @@ class Config(object):
         self.data_preprocessed = args.data_preprocessed
         self.test_only = args.test_only
 
+        self.regularization_weight = args.regularization_weight
+        self.discrepancy_loss_weight = args.discrepancy_loss_weight
+
+        self.has_mid = args.has_mid
         
