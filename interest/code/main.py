@@ -29,7 +29,7 @@ torch.cuda.manual_seed(2024)
 parser = argparse.ArgumentParser()
 parser.add_argument("--lr", type=float, default=0.001,
                     help="learning rate")
-parser.add_argument("--num_epochs", type=int, default=20,
+parser.add_argument("--num_epochs", type=int, default=30,
                     help="training epochs")
 parser.add_argument("--batch_size", type=int, default=256,
                     help="batch size for training")
@@ -126,15 +126,21 @@ def load_data(dataset_name):
     return train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict
 
 def main(rank, world_size, use_cuda):
+
+    model_dataset_path = f'{config.model_path}{config.dataset}/'
+    if not os.path.exists(model_dataset_path):
+            os.makedirs(model_dataset_path)
+
     setup(rank, world_size, use_cuda)
     if rank == 0:  
         setup_logging()
+        
     print("Data preprocessing......")
-    dataset_name = 'sampled_Home_and_Kitchen'
-    train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict = load_data(dataset_name = dataset_name)
+    train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict = load_data(config.dataset)
 
     print("Create datasets......")
     train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
+
     print("Making Data loader......")
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     valid_sampler = DistributedSampler(valid_dataset, num_replicas=world_size, rank=rank)
@@ -156,12 +162,12 @@ def main(rank, world_size, use_cuda):
         for epoch in range(config.num_epochs):
             train_sampler.set_epoch(epoch)
             print(f"Rank {rank}, Epoch {epoch} -------")
-            train_loss = train(model, train_loader, optimizer, item_to_cat_dict, device)
+            train_loss = train(model, train_loader, optimizer, item_to_cat_dict, device, rank)
             scheduler.step()
-            valid_loss, valid_accuracy = evaluate(model, valid_loader, item_to_cat_dict, device)
-            if rank == 0:
+            valid_loss, valid_accuracy = evaluate(model, valid_loader, item_to_cat_dict, device, rank)
+            if rank == 0:                
                 logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Valid Acc: {valid_accuracy}')
-                torch.save(model.state_dict(), f'../../model/{dataset_name}_checkpoint_epoch_{epoch}.pt')
+                torch.save(model.state_dict(), f'{model_dataset_path}mid_{config.has_mid}_epoch_{epoch}.pt')
             
             early_stopping(valid_loss)
             if early_stopping.early_stop:
@@ -170,11 +176,11 @@ def main(rank, world_size, use_cuda):
 
     if rank == 0 and use_cuda:
         for i in range(config.num_epochs):
-            latest_checkpoint = f'../../model/{dataset_name}_checkpoint_epoch_{i}.pt'
+            latest_checkpoint = f'{model_dataset_path}mid_{config.has_mid}_epoch_{i}.pt'
             model.load_state_dict(torch.load(latest_checkpoint))
             model.eval()
-            average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, device, k=config.k)
-            logging.info(f"{dataset_name}_epoch_{i} ------\n Test Loss: {average_loss:.4f}, Precision@{config.k}: {avg_precision:.4f}, Recall@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+            average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, device, rank, k=config.k)
+            logging.info(f"{config.dataset}_epoch_{i}---Test Loss: {average_loss:.4f}, Precision@{config.k}: {avg_precision:.4f}, Recall@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 
     cleanup()
 

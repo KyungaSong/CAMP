@@ -25,4 +25,6 @@ class Config(object):
         self.discrepancy_loss_weight = args.discrepancy_loss_weight
 
         self.has_mid = args.has_mid
+
+        self.model_path = f'../../model/'
         

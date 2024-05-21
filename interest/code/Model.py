@@ -9,7 +9,7 @@ class LongTermInterestModule(nn.Module):
         self.W_l = nn.Parameter(torch.Tensor(self.combined_dim, self.combined_dim))
         nn.init.xavier_uniform_(self.W_l) 
         self.mlp = nn.Sequential(
-            nn.Linear(self.combined_dim, self.combined_dim),
+            nn.Linear(4 * self.combined_dim, self.combined_dim),
             nn.ReLU(),
             nn.Linear(self.combined_dim, 1)            
         )
@@ -20,14 +20,18 @@ class LongTermInterestModule(nn.Module):
         nn.init.xavier_uniform_(self.user_transform.weight)
     
     def forward(self, item_his_embeds, cat_his_embeds, user_embed):        
-        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)        
-        h = torch.matmul(combined_embeds, self.W_l) 
-        user_embed_transformed = self.user_transform(user_embed)
-        user_embed_expanded = user_embed_transformed.unsqueeze(1)
-        combined = h * user_embed_expanded
-        alpha = self.mlp(combined).squeeze(2)
-        a = torch.softmax(alpha, dim=1)
-        z_l = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)
+        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)  # (batch_size, seq_len, combined_dim)
+        h = torch.matmul(combined_embeds, self.W_l)  # (batch_size, seq_len, combined_dim)
+        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, combined_dim)
+        user_embed_expanded = user_embed_transformed.unsqueeze(1)  # (batch_size, 1, combined_dim)
+        
+        diff = h - user_embed_expanded  # (batch_size, seq_len, combined_dim)
+        prod = h * user_embed_expanded  # (batch_size, seq_len, combined_dim)
+        last_hidden_nn_layer = torch.cat((h, user_embed_expanded.expand_as(h), diff, prod), dim=-1)  # (batch_size, seq_len, 4 * combined_dim)
+        
+        alpha = self.mlp(last_hidden_nn_layer).squeeze(2)  # (batch_size, seq_len)
+        a = torch.softmax(alpha, dim=1)  # (batch_size, seq_len)
+        z_l = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)  # (batch_size, combined_dim)
         return z_l
 
 class MidTermInterestModule(nn.Module):
@@ -38,7 +42,7 @@ class MidTermInterestModule(nn.Module):
         self.W_m = nn.Parameter(torch.Tensor(hidden_dim, self.combined_dim))
         nn.init.xavier_uniform_(self.W_m)
         self.mlp = nn.Sequential(
-            nn.Linear(self.combined_dim, self.combined_dim),
+            nn.Linear(4 * self.combined_dim, self.combined_dim),
             nn.ReLU(),
             nn.Linear(self.combined_dim, 1)
         )
@@ -55,15 +59,19 @@ class MidTermInterestModule(nn.Module):
                 nn.init.xavier_uniform_(param.data)
 
     def forward(self, item_his_embeds, cat_his_embeds, user_embed):
-        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
-        o, _ = self.rnn(combined_embeds)
-        h = torch.matmul(o, self.W_m)
-        user_embed_transformed = self.user_transform(user_embed)
-        user_embed_expanded = user_embed_transformed.unsqueeze(1)
-        combined = h * user_embed_expanded
-        alpha = self.mlp(combined).squeeze(2)
-        a = torch.softmax(alpha, dim=1)
-        z_m = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)
+        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)  # (batch_size, seq_len, combined_dim)
+        o, _ = self.rnn(combined_embeds)  # (batch_size, seq_len, hidden_dim)
+        h = torch.matmul(o, self.W_m)  # (batch_size, seq_len, combined_dim)
+        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, hidden_dim)
+        user_embed_expanded = user_embed_transformed.unsqueeze(1)  # (batch_size, 1, hidden_dim)
+        
+        diff = h - user_embed_expanded  # (batch_size, seq_len, combined_dim)
+        prod = h * user_embed_expanded  # (batch_size, seq_len, combined_dim)
+        last_hidden_nn_layer = torch.cat((h, user_embed_expanded.expand_as(h), diff, prod), dim=-1)  # (batch_size, seq_len, 4 * combined_dim)
+        
+        alpha = self.mlp(last_hidden_nn_layer).squeeze(2)  # (batch_size, seq_len)
+        a = torch.softmax(alpha, dim=1)  # (batch_size, seq_len)
+        z_m = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)  # (batch_size, combined_dim)
         return z_m
 
 class ShortTermInterestModule(nn.Module):
@@ -74,7 +82,7 @@ class ShortTermInterestModule(nn.Module):
         self.W_s = nn.Parameter(torch.Tensor(hidden_dim, self.combined_dim))
         nn.init.xavier_uniform_(self.W_s)
         self.mlp = nn.Sequential(
-            nn.Linear(self.combined_dim, self.combined_dim),
+            nn.Linear(4 * self.combined_dim, self.combined_dim),
             nn.ReLU(),
             nn.Linear(self.combined_dim, 1)
         )
@@ -92,15 +100,19 @@ class ShortTermInterestModule(nn.Module):
                 nn.init.xavier_uniform_(param.data)
 
     def forward(self, item_his_embeds, cat_his_embeds, user_embed):
-        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
-        o, _ = self.rnn(combined_embeds)
-        h = torch.matmul(o, self.W_s)
-        user_embed_transformed = self.user_transform(user_embed)
-        user_embed_expanded = user_embed_transformed.unsqueeze(1)
-        combined = h * user_embed_expanded
-        alpha = self.mlp(combined).squeeze(2)
-        a = torch.softmax(alpha, dim=1)
-        z_s = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)
+        combined_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)  # (batch_size, seq_len, combined_dim)
+        o, _ = self.rnn(combined_embeds)  # (batch_size, seq_len, hidden_dim)
+        h = torch.matmul(o, self.W_s)  # (batch_size, seq_len, combined_dim)
+        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, hidden_dim)
+        user_embed_expanded = user_embed_transformed.unsqueeze(1)  # (batch_size, 1, hidden_dim)
+        
+        diff = h - user_embed_expanded  # (batch_size, seq_len, combined_dim)
+        prod = h * user_embed_expanded  # (batch_size, seq_len, combined_dim)
+        last_hidden_nn_layer = torch.cat((h, user_embed_expanded.expand_as(h), diff, prod), dim=-1)  # (batch_size, seq_len, 4 * combined_dim)
+        
+        alpha = self.mlp(last_hidden_nn_layer).squeeze(2)  # (batch_size, seq_len)
+        a = torch.softmax(alpha, dim=1)  # (batch_size, seq_len)
+        z_s = torch.sum(a.unsqueeze(2) * combined_embeds, dim=1)  # (batch_size, combined_dim)
         return z_s
     
 def long_term_interest_proxy(item_his_embeds, cat_his_embeds):
@@ -211,8 +223,7 @@ class InterestFusionModule(nn.Module):
         self.mlp_pred = nn.Sequential(
             nn.Linear(embedding_dim * 4, output_dim),  
             nn.ReLU(),            
-            nn.Linear(output_dim, output_dim),
-            nn.Sigmoid()
+            nn.Linear(output_dim, output_dim)
         )
     
     def forward(self, item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, has_mid):
@@ -236,9 +247,6 @@ class InterestFusionModule(nn.Module):
         alpha_l = self.mlp_alpha_l(torch.cat((h_l, z_l, z_m), dim=1))
         if has_mid:
             alpha_m = self.mlp_alpha_m(torch.cat((h_m, z_m, z_s), dim=1))
-
-        # Interest representation
-        if has_mid:
             z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
         else:
             z_t = alpha_l * z_l + (1 - alpha_l) * z_m 
@@ -298,11 +306,11 @@ class CAMP(nn.Module):
         p_l = long_term_interest_proxy(item_his_embeds, cat_his_embeds)
         p_m = mid_term_interest_proxy(item_his_embeds, cat_his_embeds, mid_lens)
         p_s = short_term_interest_proxy(item_his_embeds, cat_his_embeds, short_lens)
-        loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s)
+        loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, self.has_mid)
 
-        y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds)     
+        y_int_pos = self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, self.has_mid)     
         y_int_negs = torch.stack([
-            self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1), cat_embed.squeeze(1))
+            self.interest_fusion_module(item_his_embeds, cat_his_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1), cat_embed.squeeze(1), self.has_mid)
             for neg_embed, cat_embed in zip(neg_items_embeds.split(1, dim=1), neg_cats_embeds.split(1, dim=1))
         ], dim=1).squeeze(2) 
 

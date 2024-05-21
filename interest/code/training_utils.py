@@ -19,10 +19,12 @@ def train(model, data_loader, optimizer, item_to_cat_dict, device, rank):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
         
-        loss, _, _ = model(batch, item_to_cat_dict, device)
-        loss = loss.mean()  
+        loss, y_int_pos, y_int_negs = model(batch, item_to_cat_dict, device)
+        print(f"y_int_pos: {y_int_pos[0]}, y_int_negs: {y_int_negs[0]}, loss", {loss[0]})
+        loss = loss.mean()        
         loss.backward()
         optimizer.step()
+        total_loss += loss.item()
 
     average_loss = total_loss / len(data_loader)
     print(f"Average Training Loss: {average_loss:.4f}")
