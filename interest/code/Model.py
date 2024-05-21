@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class LongTermInterestModule(nn.Module):
-    def __init__(self, embedding_dim):
+    def __init__(self, embedding_dim, dropout_rate):
         super(LongTermInterestModule, self).__init__()
         self.combined_dim = 2 * embedding_dim  
         self.W_l = nn.Parameter(torch.Tensor(self.combined_dim, self.combined_dim))
@@ -11,6 +11,7 @@ class LongTermInterestModule(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(4 * self.combined_dim, self.combined_dim),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(self.combined_dim, 1)            
         )
         for layer in self.mlp:
@@ -35,7 +36,7 @@ class LongTermInterestModule(nn.Module):
         return z_l
 
 class MidTermInterestModule(nn.Module):
-    def __init__(self, embedding_dim, hidden_dim):
+    def __init__(self, embedding_dim, hidden_dim, dropout_rate):
         super(MidTermInterestModule, self).__init__()
         self.combined_dim = 2 * embedding_dim  
         self.rnn = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
@@ -44,6 +45,7 @@ class MidTermInterestModule(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(4 * self.combined_dim, self.combined_dim),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(self.combined_dim, 1)
         )
         for layer in self.mlp:
@@ -75,7 +77,7 @@ class MidTermInterestModule(nn.Module):
         return z_m
 
 class ShortTermInterestModule(nn.Module):
-    def __init__(self, embedding_dim, hidden_dim):
+    def __init__(self, embedding_dim, hidden_dim, dropout_rate):
         super(ShortTermInterestModule, self).__init__()
         self.combined_dim = 2 * embedding_dim 
         self.rnn = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
@@ -84,6 +86,7 @@ class ShortTermInterestModule(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(4 * self.combined_dim, self.combined_dim),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(self.combined_dim, 1)
         )
         for layer in self.mlp:
@@ -200,7 +203,7 @@ def compute_discrepancy_loss(a, b, discrepancy_loss_weight):
     return discrepancy_loss
 
 class InterestFusionModule(nn.Module):
-    def __init__(self, embedding_dim, hidden_dim, output_dim):
+    def __init__(self, embedding_dim, hidden_dim, output_dim, dropout_rate):
         super(InterestFusionModule, self).__init__()
         self.combined_dim = 2 * embedding_dim  
         self.gru_l = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
@@ -210,12 +213,14 @@ class InterestFusionModule(nn.Module):
         self.mlp_alpha_l = nn.Sequential(
             nn.Linear(input_dim_for_alpha, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()
         )
         self.mlp_alpha_m = nn.Sequential(
             nn.Linear(input_dim_for_alpha, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()
         )
@@ -223,6 +228,7 @@ class InterestFusionModule(nn.Module):
         self.mlp_pred = nn.Sequential(
             nn.Linear(embedding_dim * 4, output_dim),  
             nn.ReLU(),            
+            nn.Dropout(dropout_rate),
             nn.Linear(output_dim, output_dim)
         )
     
@@ -268,10 +274,10 @@ class CAMP(nn.Module):
         self.user_embedding = nn.Embedding(num_users, config.embedding_dim)
         self.item_embedding = nn.Embedding(num_items + 1, config.embedding_dim, padding_idx=0)
         self.cat_embedding = nn.Embedding(num_cats + 1, config.embedding_dim, padding_idx=0)
-        self.long_term_module = LongTermInterestModule(config.embedding_dim)
-        self.mid_term_module = MidTermInterestModule(config.embedding_dim, config.hidden_dim)
-        self.short_term_module = ShortTermInterestModule(config.embedding_dim, config.hidden_dim)
-        self.interest_fusion_module = InterestFusionModule(config.embedding_dim, config.hidden_dim, config.output_dim)
+        self.long_term_module = LongTermInterestModule(config.embedding_dim, config.dropout_rate)
+        self.mid_term_module = MidTermInterestModule(config.embedding_dim, config.hidden_dim, config.dropout_rate)
+        self.short_term_module = ShortTermInterestModule(config.embedding_dim, config.hidden_dim, config.dropout_rate)
+        self.interest_fusion_module = InterestFusionModule(config.embedding_dim, config.hidden_dim, config.output_dim, config.dropout_rate)
         self.bce_loss_module = BCELossModule(pos_weight=torch.tensor([4.0]))
         self.regularization_weight = config.regularization_weight
         self.discrepancy_loss_weight = config.discrepancy_loss_weight

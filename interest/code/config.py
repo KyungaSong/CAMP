@@ -3,6 +3,8 @@ class Config(object):
         self.lr = args.lr
         self.num_epochs = args.num_epochs
         self.batch_size = args.batch_size 
+        self.dropout_rate = args.dropout_rate
+        
         self.embedding_dim = args.embedding_dim
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
@@ -27,4 +29,5 @@ class Config(object):
         self.has_mid = args.has_mid
 
         self.model_path = f'../../model/'
+        
         

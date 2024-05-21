@@ -33,6 +33,9 @@ parser.add_argument("--num_epochs", type=int, default=30,
                     help="training epochs")
 parser.add_argument("--batch_size", type=int, default=256,
                     help="batch size for training")
+parser.add_argument("--dropout_rate", type=float, default=0.5,
+                    help="dropout rate for model")
+
 parser.add_argument("--embedding_dim", type=int, default=128,
                     help="embedding size for embedding vectors")
 parser.add_argument("--hidden_dim", type=int, default=256,
