@@ -2,20 +2,14 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import torch.nn as nn
-import torch.distributed as dist
 from sklearn.metrics import roc_auc_score
 
-def train(model, data_loader, optimizer, device, rank):
+def train(model, data_loader, optimizer, device):
     model.train()
     total_loss = 0
     criteria = nn.MSELoss()
 
-    if rank == 0:
-        pbar = tqdm(data_loader, desc="Training")
-    else:
-        pbar = data_loader
-
-    for batch in pbar:
+    for batch in tqdm(data_loader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
         
@@ -33,28 +27,17 @@ def train(model, data_loader, optimizer, device, rank):
         torch.cuda.empty_cache()
 
     average_loss = total_loss / len(data_loader)
-    torch.cuda.synchronize()
-    
-    total_loss_tensor = torch.tensor(total_loss).cuda()
-    dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-    average_loss = total_loss_tensor.item() / dist.get_world_size() / len(data_loader)
     
     return average_loss
 
-# 3) Evaluating
-def evaluate(model, data_loader, device, rank):
+def evaluate(model, data_loader, device):
     model.eval()
     total_loss = 0
     total_rmse = 0
     criteria = nn.MSELoss()
 
-    if rank == 0:
-        pbar = tqdm(data_loader, desc="Evaluating")
-    else:
-        pbar = data_loader
-
     with torch.no_grad():
-        for batch in pbar:
+        for batch in tqdm(data_loader, desc="Evaluating"):
             batch = {k: v.to(device) for k, v in batch.items()}
             pop_history_output, time_output, sideinfo_output, output = model(batch)
 
@@ -72,32 +55,17 @@ def evaluate(model, data_loader, device, rank):
 
     average_loss = total_loss / len(data_loader)
     average_rmse = total_rmse / len(data_loader)
-    torch.cuda.synchronize()
-    
-    total_loss_tensor = torch.tensor(total_loss).cuda()
-    dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-    average_loss = total_loss_tensor.item() / dist.get_world_size() / len(data_loader)
-    
-    total_rmse_tensor = torch.tensor(total_rmse).cuda()
-    dist.all_reduce(total_rmse_tensor, op=dist.ReduceOp.SUM)
-    average_rmse = total_rmse_tensor.item() / dist.get_world_size() / len(data_loader)
     
     return average_loss, average_rmse
 
-# 4) Testing
-def test(model, data_loader, device, rank):
+def test(model, data_loader, device):
     model.eval()
     total_loss = 0
     total_rmse = 0
     criteria = nn.MSELoss()
 
-    if rank == 0:
-        pbar = tqdm(data_loader, desc="Testing")
-    else:
-        pbar = data_loader
-
     with torch.no_grad():
-        for batch in pbar:
+        for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
             pop_history_output, time_output, sideinfo_output, output = model(batch)
 
@@ -115,15 +83,6 @@ def test(model, data_loader, device, rank):
 
     average_loss = total_loss / len(data_loader)
     average_rmse = total_rmse / len(data_loader)
-    torch.cuda.synchronize()
-    
-    total_loss_tensor = torch.tensor(total_loss).cuda()
-    dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-    average_loss = total_loss_tensor.item() / dist.get_world_size() / len(data_loader)
-    
-    total_rmse_tensor = torch.tensor(total_rmse).cuda()
-    dist.all_reduce(total_rmse_tensor, op=dist.ReduceOp.SUM)
-    average_rmse = total_rmse_tensor.item() / dist.get_world_size() / len(data_loader)
     
     return average_loss, average_rmse
 
