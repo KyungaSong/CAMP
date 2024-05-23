@@ -26,7 +26,7 @@ class Config(object):
         self.regularization_weight = args.regularization_weight
         self.discrepancy_loss_weight = args.discrepancy_loss_weight
 
-        self.has_mid = args.has_mid
+        self.no_mid = args.no_mid
 
         self.model_path = f'../../model/'
         

@@ -52,19 +52,18 @@ parser.add_argument("--k", type=int, default=20,
 
 parser.add_argument("--dataset", type=str, default='sampled_Home_and_Kitchen',
                     help="dataset file name")
-parser.add_argument("--data_preprocessed", type=bool, default=False,
+parser.add_argument("--data_preprocessed", action="store_true",
                     help="flag to indicate if the input data has already been preprocessed")
-parser.add_argument("--test_only", type=bool, default=False,
+parser.add_argument("--test_only", action="store_true",
                     help="flag to indicate if only testing should be performed")
+parser.add_argument('--no_mid', action="store_true", 
+                    help='flag to indicate if model has mid-term module')
 
 parser.add_argument('--discrepancy_loss_weight', type=float, default =0.01, 
                     help='Loss weight for discrepancy between long and short term user embedding.')
 parser.add_argument('--regularization_weight', type=float, default =0.0001, 
                     help='weight for L2 regularization applied to model parameters')
 
-parser.add_argument('--has_mid', type=bool, default =True, 
-                    help='flag to indicate if model has mid-term module')
- 
 
 args = parser.parse_args()
 config = Config(args=args)
@@ -88,6 +87,7 @@ def load_data(dataset_name):
     review_file_path = f'{dataset_path}{dataset_name}.pkl'
     meta_file_path = f'{dataset_path}meta_{dataset_name}.pkl'
     processed_path = f'../../dataset/preprocessed/{dataset_name}/'
+    pop_file_path = f'../../results/0523/{dataset_name}_pop_results.pkl'
 
     if os.path.exists(f'{processed_path}/train_df.pkl') and os.path.exists(f'{processed_path}/valid_df.pkl') and os.path.exists(f'{processed_path}/test_df.pkl') and config.data_preprocessed:
         with open(f'{processed_path}/train_df.pkl', 'rb') as file:
@@ -101,20 +101,28 @@ def load_data(dataset_name):
         num_users = combined_df['user_encoded'].nunique()
         num_items = combined_df['item_encoded'].nunique()
         num_cats = combined_df['cat_encoded'].nunique()
-        item_to_cat_dict = dict(zip(combined_df['item_encoded'], combined_df['cat_encoded']))
+
+        combined_df = combined_df.sort_values(by=['item_encoded', 'unit_time']).reset_index(drop=True)
+        # item_to_cat_dict = dict(zip(combined_df['item_encoded'], combined_df['cat_encoded']))
+        item_to_cat_dict = combined_df.groupby('item_encoded')['cat_encoded'].last().to_dict()
+        item_to_con_dict = combined_df.groupby('item_encoded')['conformity'].last().to_dict()
+        item_to_qlt_dict = combined_df.groupby('item_encoded')['quality'].last().to_dict()
         print("Processed files already exist. Skipping dataset preparation.")
         print(f'df: {len(combined_df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
     else:
         try:
-            df = load_dataset(review_file_path)
-            df_meta = load_dataset(meta_file_path, meta=True)
+            df = load_dataset(review_file_path, type='review')
+            df_meta = load_dataset(meta_file_path, type='meta')
+            df_pop = load_dataset(pop_file_path, type='pop')
 
             num_users = df['user_id'].nunique()
             num_items = df['item_id'].nunique()
             num_cats = df_meta['category'].nunique()
             print(f'df: {len(df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
             df = pd.merge(df, df_meta, on='item_id', how='left')
-            train_df, valid_df, test_df, item_to_cat_dict = preprocess_df(df, config)
+            df = pd.merge(df, df_pop, on=['item_id', 'timestamp'], how='inner')
+            print("merged df: \n", df)
+            train_df, valid_df, test_df, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict = preprocess_df(df, config)
 
             if not os.path.exists(processed_path):
                 os.makedirs(processed_path)
@@ -125,8 +133,8 @@ def load_data(dataset_name):
         except Exception as e:
             logging.error(f"Error during data preparation: {str(e)}")
             raise
-
-    return train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict
+    
+    return train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict
 
 def main(rank, world_size, use_cuda):
 
@@ -139,7 +147,7 @@ def main(rank, world_size, use_cuda):
         setup_logging()
         
     print("Data preprocessing......")
-    train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict = load_data(config.dataset)
+    train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict = load_data(config.dataset)
 
     print("Create datasets......")
     train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
@@ -156,21 +164,23 @@ def main(rank, world_size, use_cuda):
     device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
     model = CAMP(num_users, num_items, num_cats, config).to(device)
     model = DDP(model, device_ids=[rank]) if use_cuda else model    
-
+    
     if not config.test_only:
         optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=1e-5)
         scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
         early_stopping = EarlyStopping(patience=10, verbose=True)
         
+        logging.info(f"{config.dataset}_no_mid_{config.no_mid}-----------------------------------------------------------------------------------")
         for epoch in range(config.num_epochs):
             train_sampler.set_epoch(epoch)
-            print(f"Rank {rank}, Epoch {epoch} -------")
-            train_loss = train(model, train_loader, optimizer, item_to_cat_dict, device, rank)
+            if rank == 0:
+                print(f"Rank {rank}, Epoch {epoch+1} -----------------------------------")
+            train_loss = train(model, train_loader, optimizer, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device, rank)
             scheduler.step()
-            valid_loss, valid_accuracy = evaluate(model, valid_loader, item_to_cat_dict, device, rank)
+            valid_loss, valid_accuracy = evaluate(model, valid_loader, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device, rank)
             if rank == 0:                
                 logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Valid Acc: {valid_accuracy}')
-                torch.save(model.state_dict(), f'{model_dataset_path}mid_{config.has_mid}_epoch_{epoch}.pt')
+                torch.save(model.state_dict(), f'{model_dataset_path}mid_{config.no_mid}_epoch_{epoch}.pt')
             
             early_stopping(valid_loss)
             if early_stopping.early_stop:
@@ -179,11 +189,13 @@ def main(rank, world_size, use_cuda):
 
     if rank == 0 and use_cuda:
         for i in range(config.num_epochs):
-            latest_checkpoint = f'{model_dataset_path}mid_{config.has_mid}_epoch_{i}.pt'
+            latest_checkpoint = f'{model_dataset_path}mid_{config.no_mid}_epoch_{i}.pt'
+            if not os.path.exists(latest_checkpoint):
+                break
             model.load_state_dict(torch.load(latest_checkpoint))
             model.eval()
-            average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, device, rank, k=config.k)
-            logging.info(f"{config.dataset}_epoch_{i}---Test Loss: {average_loss:.4f}, Precision@{config.k}: {avg_precision:.4f}, Recall@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+            average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device, rank, k=config.k)
+            logging.info(f"epoch_{i}---Test Loss: {average_loss:.4f}, Precision@{config.k}: {avg_precision:.4f}, Recall@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 
     cleanup()
 

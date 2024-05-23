@@ -12,15 +12,15 @@ from multiprocessing import cpu_count
 
 tqdm.pandas()
 
-def load_dataset(file_path, meta = False):
+def load_dataset(file_path, type = 'pop'):
     with open(file_path, 'rb') as file:
         df = pickle.load(file) 
-    if meta:
+    if type == 'meta':
         necessary_columns = ['average_rating', 'rating_number', 'store', 'parent_asin', 'categories']
         df = df[necessary_columns].rename(columns={'average_rating': 'avg_rating', 'parent_asin': 'item_id'})
         df['category'] = df['categories'].apply(lambda x: x[1] if len(x) > 1 else (x[0] if len(x) == 1 else None))
-    else:        
-        df = df.rename(columns={'parent_asin': 'item_id'})          
+    elif type == 'review':
+        df = df.rename(columns={'parent_asin': 'item_id'})                  
     return df
 
 def encode_column(column, pad = False):
@@ -53,10 +53,6 @@ def calculate_ranges(group, k_m, k_s):
 
     return group[['mid_len', 'short_len']]
 
-def generate_negative_samples(all_item_ids, positive_item_id, history):
-    non_interacted_items = list(all_item_ids - set(history) - {positive_item_id})
-    return non_interacted_items
-
 @lru_cache(maxsize=1024)
 def generate_negative_samples_cached(all_item_ids, positive_item_id, history_tuple, num_samples=4):
     history = set(history_tuple)
@@ -74,18 +70,6 @@ def generate_negative_samples_for_row(all_item_ids, item_encoded, item_his_encod
         tuple(item_his_encoded),
         num_samples
     )
-
-def parallel_generate_negative_samples(df, all_item_ids, num_samples):
-    num_threads = min(cpu_count(), 4)
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = {
-            executor.submit(generate_negative_samples_for_row, all_item_ids, row.item_encoded, row.item_his_encoded, num_samples): row.Index
-            for row in df.itertuples()
-        }
-        neg_samples = {}
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating negative samples"):
-            neg_samples[futures[future]] = future.result()
-    return [neg_samples[idx] for idx in range(len(df))]
 
 def generate_negative_samples_vectorized(df, all_item_ids, num_samples):
     all_item_ids = np.array(list(all_item_ids))
@@ -121,6 +105,9 @@ def preprocess_df(df, config):
     df['item_encoded'] = encode_column(df['item_id'], pad = True)
     df['cat_encoded'] = encode_column(df['category'], pad = True)
     item_to_cat_dict = dict(zip(df['item_encoded'], df['cat_encoded']))
+    item_to_con_dict = df.groupby('item_encoded')['conformity'].last().to_dict()
+    item_to_qlt_dict = df.groupby('item_encoded')['quality'].last().to_dict()
+
     max_item_id = df['item_encoded'].max()
     all_item_ids = set(range(1, max_item_id + 1))
 
@@ -129,6 +116,8 @@ def preprocess_df(df, config):
 
     df['item_his_encoded'] = df.groupby('user_id')['item_encoded'].transform(get_history) 
     df['cat_his_encoded'] = df.groupby('user_id')['cat_encoded'].transform(get_history) 
+    df['con_his'] = df.groupby('user_id')['conformity'].transform(get_history) 
+    df['qlt_his'] = df.groupby('user_id')['quality'].transform(get_history) 
 
     # Precompute item_his_encoded as sets and tuples
     df['item_his_encoded_set'] = df['item_his_encoded'].apply(set)
@@ -141,22 +130,14 @@ def preprocess_df(df, config):
     df = pd.concat([df, ranges_df], axis=1) 
     print('calculate ranges end')
 
-    df = df[['user_id', 'user_encoded', 'item_encoded', 'cat_encoded', 'item_his_encoded', 'item_his_encoded_set', 'item_his_encoded_tuple', 'cat_his_encoded', 'unit_time', 'mid_len', 'short_len']]
+    df = df[['user_id', 'user_encoded', 'item_encoded', 'cat_encoded', 'conformity', 'quality', 'item_his_encoded', 'item_his_encoded_set', 'item_his_encoded_tuple', 'cat_his_encoded', 'con_his', 'qlt_his', 'unit_time', 'mid_len', 'short_len']]
     # df['item_his_encoded_set'] = df['item_his_encoded'].apply(set)
-    print("df:\n", df)
+    # print("df:\n", df)
     
     print('Split into train, valid, test dataframe...')
     train_df = df.groupby('user_id').apply(lambda x: x.iloc[:-2], include_groups=False).reset_index(drop=True)
     valid_df = df.groupby('user_id').apply(lambda x: x.iloc[-2:-1], include_groups=False).reset_index(drop=True)
     test_df = df.groupby('user_id').apply(lambda x: x.iloc[-1:], include_groups=False).reset_index(drop=True)       
-
-    # print('Making negative sample start')    
-    # train_df['neg_items'] = train_df.progress_apply(lambda row: generate_negative_samples_for_row(all_item_ids, row.item_encoded, row.item_his_encoded, config.train_num_samples), axis=1)
-    # valid_df['neg_items'] = valid_df.progress_apply(lambda row: generate_negative_samples_for_row(all_item_ids, row.item_encoded, row.item_his_encoded, config.valid_num_samples), axis=1)
-    # test_df['neg_items'] = test_df.progress_apply(lambda row: generate_negative_samples_for_row(all_item_ids, row.item_encoded, row.item_his_encoded, config.test_num_samples), axis=1)
-
-    # test_df['neg_items'] = test_df['neg_items'] + test_df['item_encoded'].apply(lambda x: [x])
-    # print('Making negative sample end')
 
     print('Making negative sample start')    
     train_df['neg_items'] = generate_negative_samples_vectorized(train_df, all_item_ids, config.train_num_samples)
@@ -164,15 +145,19 @@ def preprocess_df(df, config):
     test_df['neg_items'] = generate_negative_samples_vectorized(test_df, all_item_ids, config.test_num_samples)
     test_df['neg_items'] = test_df['neg_items'] + test_df['item_encoded'].apply(lambda x: [x])
     print('Making negative sample end')
-    return train_df, valid_df, test_df, item_to_cat_dict
+    return train_df, valid_df, test_df, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict
 
 class MakeDataset(Dataset):
-    def __init__(self, users, items, cats, item_histories, cat_histories, mid_lens, short_lens, neg_items=None):
+    def __init__(self, users, items, cats, cons, qlts, item_histories, cat_histories, con_histories, qlt_histories, mid_lens, short_lens, neg_items=None):
         self.users = torch.tensor(users, dtype=torch.long)
         self.items = torch.tensor(items, dtype=torch.long)  
         self.cats = torch.tensor(cats, dtype=torch.long)       
+        self.cons = torch.tensor(cons, dtype=torch.float)  
+        self.qlts = torch.tensor(qlts, dtype=torch.float) 
         self.item_histories = [torch.tensor(h, dtype=torch.long) for h in item_histories]
         self.cat_histories = [torch.tensor(c, dtype=torch.long) for c in cat_histories]
+        self.con_histories = [torch.tensor(c, dtype=torch.float) for c in con_histories]
+        self.qlt_histories = [torch.tensor(q, dtype=torch.float) for q in qlt_histories]
         self.mid_lens = torch.tensor(mid_lens, dtype=torch.int)
         self.short_lens = torch.tensor(short_lens, dtype=torch.int)
         # Only initialize can_neg if provided
@@ -192,9 +177,13 @@ class MakeDataset(Dataset):
         data = {
             'user': self.users[idx],
             'item': self.items[idx],   
-            'cat': self.cats[idx],           
+            'cat': self.cats[idx],       
+            'con': self.cons[idx],   
+            'qlt': self.qlts[idx],      
             'item_his': self.item_histories[idx],
             'cat_his': self.cat_histories[idx],
+            'con_his': self.con_histories[idx],
+            'qlt_his': self.qlt_histories[idx],
             'mid_len': self.mid_lens[idx],
             'short_len': self.short_lens[idx]
         }
@@ -207,15 +196,18 @@ class MakeDataset(Dataset):
 
 def create_datasets(train_df, valid_df, test_df):
     train_dataset = MakeDataset(
-        train_df['user_encoded'], train_df['item_encoded'], train_df['cat_encoded'], train_df['item_his_encoded'], train_df['cat_his_encoded'],
+        train_df['user_encoded'], train_df['item_encoded'], train_df['cat_encoded'], train_df['conformity'], train_df['quality'],
+        train_df['item_his_encoded'], train_df['cat_his_encoded'],  train_df['con_his'], train_df['qlt_his'], 
         train_df['mid_len'], train_df['short_len'], train_df['neg_items']
     )
     valid_dataset = MakeDataset(
-        valid_df['user_encoded'], valid_df['item_encoded'], valid_df['cat_encoded'], valid_df['item_his_encoded'], valid_df['cat_his_encoded'],
+        valid_df['user_encoded'], valid_df['item_encoded'], valid_df['cat_encoded'], valid_df['conformity'], valid_df['quality'],
+        valid_df['item_his_encoded'], valid_df['cat_his_encoded'], valid_df['con_his'], valid_df['qlt_his'], 
         valid_df['mid_len'], valid_df['short_len'], valid_df['neg_items']
     )
     test_dataset = MakeDataset(
-        test_df['user_encoded'], test_df['item_encoded'], test_df['cat_encoded'], test_df['item_his_encoded'], test_df['cat_his_encoded'],
+        test_df['user_encoded'], test_df['item_encoded'], test_df['cat_encoded'], test_df['conformity'], test_df['quality'],
+        test_df['item_his_encoded'], test_df['cat_his_encoded'], test_df['con_his'], test_df['qlt_his'], 
         test_df['mid_len'], test_df['short_len'], test_df['neg_items']
     )
     return train_dataset, valid_dataset, test_dataset
