@@ -41,13 +41,13 @@ class ModuleTime(nn.Module):
         self.config = config
         self.fc_time_value = nn.Linear(config.embedding_dim * 4, 1)
         self.batch_norm = nn.BatchNorm1d(config.embedding_dim * 4)
-        self.relu = nn.LeakyReLU(0.01)
+        self.relu = nn.ReLU() 
         self.dropout = nn.Dropout(p=0.6)
 
     def forward(self, item_embeds, time_release_embeds, time_embeds):
         temporal_gap = time_release_embeds - time_embeds
         item_temp_embed = torch.cat((temporal_gap, item_embeds, time_embeds, time_release_embeds), 1)
-        item_temp_embed = self.batch_norm(item_temp_embed)  # Batch Normalization 적용
+        item_temp_embed = self.batch_norm(item_temp_embed)  
         item_temp_embed = self.dropout(item_temp_embed)
         time_final = self.relu(self.fc_time_value(item_temp_embed))
         return time_final
@@ -62,7 +62,7 @@ class ModuleSideInfo(nn.Module):
 
     def forward(self, cat_embeds, store_embeds):
         embed_sideinfo = torch.cat((cat_embeds, store_embeds), 1)
-        embed_sideinfo = self.batch_norm(embed_sideinfo)  # Batch Normalization 적용
+        embed_sideinfo = self.batch_norm(embed_sideinfo)  
         embed_sideinfo = self.dropout(embed_sideinfo)
         embed_sideinfo = self.fc_output(embed_sideinfo)
         return embed_sideinfo
@@ -121,11 +121,8 @@ class PopPredict(nn.Module):
         weighted_pop_history_output = pop_history_output * normalized_weights[0]
         weighted_time_output = time_output * normalized_weights[1]
         weighted_sideinfo_output = sideinfo_output * normalized_weights[2]
+        output = weighted_pop_history_output + weighted_time_output + weighted_sideinfo_output
 
-        # Concatenate module outputs
-        pred_all = torch.cat((weighted_pop_history_output, weighted_time_output, weighted_sideinfo_output), dim=1)
-        output = torch.sum(pred_all, dim=1)  # Adjusted to sum over the weighted outputs
-
-        if not self.is_training:
-            print('Attention weights:', normalized_weights.data.cpu().numpy())
+        # if not self.is_training:
+        #     print('Attention weights:', normalized_weights.data.cpu().numpy())
         return weighted_pop_history_output, weighted_time_output, weighted_sideinfo_output, output

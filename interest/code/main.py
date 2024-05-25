@@ -80,14 +80,14 @@ def cleanup():
     dist.destroy_process_group()
 
 def setup_logging():
-    logging.basicConfig(filename='../../log.txt', level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s')
+    logging.basicConfig(filename='../../log.txt', level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%Y-%m-%d')
 
 def load_data(dataset_name):    
     dataset_path = f'../../dataset/{dataset_name}/'
     review_file_path = f'{dataset_path}{dataset_name}.pkl'
     meta_file_path = f'{dataset_path}meta_{dataset_name}.pkl'
     processed_path = f'../../dataset/preprocessed/{dataset_name}/'
-    pop_file_path = f'../../results/0523/{dataset_name}_pop_results.pkl'
+    pop_file_path = f'../../dataset/{dataset_name}/pop_{dataset_name}.pkl'
 
     if os.path.exists(f'{processed_path}/train_df.pkl') and os.path.exists(f'{processed_path}/valid_df.pkl') and os.path.exists(f'{processed_path}/test_df.pkl') and config.data_preprocessed:
         with open(f'{processed_path}/train_df.pkl', 'rb') as file:

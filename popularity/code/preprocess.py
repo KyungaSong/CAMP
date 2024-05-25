@@ -50,20 +50,32 @@ def preprocess_df(df, config):
 
     df = df.merge(df_pop, on='item_encoded', how='left')
     
-    unique_items = df['item_encoded'].unique()
-    np.random.shuffle(unique_items)
+    # unique_items = df['item_encoded'].unique()
+    # np.random.shuffle(unique_items)
 
-    num_items = len(unique_items)
-    train_end = int(num_items * 0.8)
-    valid_end = train_end + int(num_items * 0.1)
+    # num_items = len(unique_items)
+    # train_end = int(num_items * 0.8)
+    # valid_end = train_end + int(num_items * 0.1)
 
-    train_items = unique_items[:train_end]
-    valid_items = unique_items[train_end:valid_end]
-    test_items = unique_items[valid_end:]
+    # train_items = unique_items[:train_end]
+    # valid_items = unique_items[train_end:valid_end]
+    # test_items = unique_items[valid_end:]
 
-    train_df = df[df['item_encoded'].isin(train_items)]
-    valid_df = df[df['item_encoded'].isin(valid_items)]
-    test_df = df[df['item_encoded'].isin(test_items)]
+    # train_df = df[df['item_encoded'].isin(train_items)]
+    # valid_df = df[df['item_encoded'].isin(valid_items)]
+    # test_df = df[df['item_encoded'].isin(test_items)]
+
+    train_df = df[df['unit_time'] < max_time * 0.94]
+    valid_df = df[(df['unit_time'] >= max_time * 0.94) & (df['unit_time'] < max_time * 0.97)]
+    test_df = df[df['unit_time'] >= max_time * 0.97]
+
+    # 비율 계산
+    total_length = len(df)
+    train_ratio = len(train_df) / total_length
+    valid_ratio = len(valid_df) / total_length
+    test_ratio = len(test_df) / total_length
+
+    print(f"Train ratio: {train_ratio:.2f}, Valid ratio: {valid_ratio:.2f}, Test ratio: {test_ratio:.2f}")
 
     return train_df, valid_df, test_df, max_time
 
