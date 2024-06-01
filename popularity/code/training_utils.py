@@ -2,7 +2,6 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import torch.nn as nn
-from sklearn.metrics import roc_auc_score
 
 def train(model, data_loader, optimizer, device):
     model.train()
@@ -18,7 +17,12 @@ def train(model, data_loader, optimizer, device):
         target_index = batch['time'].long().unsqueeze(1)
         pop_gt = torch.gather(batch['pop_history'], 1, target_index).squeeze().float()
 
-        loss = criteria(output.squeeze(), pop_gt)
+        loss_p = criteria(pop_history_output.squeeze(), pop_gt)
+        loss_t = criteria(time_output.squeeze(), pop_gt)
+        loss_s = criteria(sideinfo_output.squeeze(), pop_gt)
+        loss_o = criteria(output.squeeze(), pop_gt)
+        loss = loss_p + loss_t + loss_s + loss_o
+        # loss = criteria(output.squeeze(), pop_gt)
 
         loss.backward()
         optimizer.step()
@@ -44,7 +48,12 @@ def evaluate(model, data_loader, device):
             target_index = batch['time'].long().unsqueeze(1)
             pop_gt = torch.gather(batch['pop_history'], 1, target_index).squeeze().float()
 
-            loss = criteria(output.squeeze(), pop_gt)
+            loss_p = criteria(pop_history_output.squeeze(), pop_gt)
+            loss_t = criteria(time_output.squeeze(), pop_gt)
+            loss_s = criteria(sideinfo_output.squeeze(), pop_gt)
+            loss_o = criteria(output.squeeze(), pop_gt)
+            loss = loss_p + loss_t + loss_s + loss_o
+            # loss = criteria(output.squeeze(), pop_gt)
 
             total_loss += loss.item()
             torch.cuda.empty_cache()
@@ -58,33 +67,37 @@ def evaluate(model, data_loader, device):
     
     return average_loss, average_rmse
 
-def test(model, data_loader, device):
+def test(model, test_loader, device):
     model.eval()
-    total_loss = 0
-    total_rmse = 0
+    test_loss = 0.0
+    test_rmse = 0.0
     criteria = nn.MSELoss()
 
     with torch.no_grad():
-        for batch in tqdm(data_loader, desc="Testing"):
-            batch = {k: v.to(device) for k, v in batch.items()}
+        for batch in test_loader:
+            batch = {k: v.to(device) for k, v in batch.items()}  # Ensure all batch items are moved to the device
+
             pop_history_output, time_output, sideinfo_output, output = model(batch)
 
             target_index = batch['time'].long().unsqueeze(1)
             pop_gt = torch.gather(batch['pop_history'], 1, target_index).squeeze().float()
 
-            loss = criteria(output.squeeze(), pop_gt)
-
-            total_loss += loss.item()
+            loss_p = criteria(pop_history_output.squeeze(), pop_gt)
+            loss_t = criteria(time_output.squeeze(), pop_gt)
+            loss_s = criteria(sideinfo_output.squeeze(), pop_gt)
+            loss_o = criteria(output.squeeze(), pop_gt)
+            loss = loss_p + loss_t + loss_s + loss_o
+            
+            test_loss += loss.item()
             torch.cuda.empty_cache()
 
-            mse = loss.item()
-            rmse = np.sqrt(mse)
-            total_rmse += rmse
+            rmse = torch.sqrt(loss).item()
+            test_rmse += rmse
 
-    average_loss = total_loss / len(data_loader)
-    average_rmse = total_rmse / len(data_loader)
-    
+    average_loss = test_loss / len(test_loader)
+    average_rmse = test_rmse / len(test_loader)
     return average_loss, average_rmse
+
 
 class EarlyStopping:
     def __init__(self, patience=7, verbose=False, delta=0):

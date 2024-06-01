@@ -9,11 +9,10 @@ import pandas as pd
 import argparse
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from config import Config
-from preprocess import load_dataset, preprocess_df, create_datasets
+from preprocess import create_datasets
 from Model import PopPredict
 
 ########################################################### config
@@ -31,9 +30,9 @@ parser.add_argument("--lr", type=float, default=0.01,
                     help="learning rate")
 parser.add_argument("--num_epochs", type=int, default=50,
                     help="training epochs")
-parser.add_argument("--time_unit", type=int, default=1000 * 60 * 60 * 24,
+parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
                     help="smallest time unit for model training")
-parser.add_argument("--pop_time_unit", type=int, default=30,
+parser.add_argument("--pop_time_unit", type=int, default=3*30,
                     help="smallest time unit for item popularity statistic")
 parser.add_argument("--dataset", type=str, default='sampled_Home_and_Kitchen',
                     help="dataset file name")
@@ -50,6 +49,18 @@ config = Config(args=args)
 def setup_logging():
     logging.basicConfig(filename='../../pop_log.txt', level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s')
 
+def expand_time(row, max_time):
+    unit_times = range(row['release_time'], max_time + 1)
+    return pd.DataFrame({
+        'item_encoded': [row['item_encoded']] * len(unit_times),
+        'unit_time': list(unit_times),
+        'release_time': [row['release_time']] * len(unit_times),
+        'pop_history': [row['pop_history']] * len(unit_times),
+        'avg_rating': [row['avg_rating']] * len(unit_times),
+        'cat_encoded': [row['cat_encoded']] * len(unit_times),
+        'store_encoded': [row['store_encoded']] * len(unit_times)
+    })
+
 def load_data(dataset_name):
     processed_path = f'../../dataset/preprocessed/pop/{dataset_name}/'
 
@@ -62,20 +73,21 @@ def load_data(dataset_name):
         test_df = pickle.load(file)
 
     combined_df = pd.concat([train_df, valid_df, test_df])
-    num_items = combined_df['item_encoded'].nunique()
-    num_cats = combined_df['cat_encoded'].nunique()
-    num_stores = combined_df['store_encoded'].nunique()
     max_time = combined_df["unit_time"].max()
-    
-    if combined_df is not None:
-        del combined_df
+
+    first_df = combined_df.drop_duplicates(subset='item_encoded', keep='first')
+    first_df = first_df[['item_encoded', 'release_time', 'pop_history','avg_rating', 'cat_encoded', 'store_encoded']]
+    num_items = first_df['item_encoded'].nunique()
+    num_cats = first_df['cat_encoded'].nunique()
+    num_stores = first_df['store_encoded'].nunique()
+
+    result_df = pd.concat([expand_time(row, max_time) for _, row in first_df.iterrows()]).reset_index(drop=True)
+
     if 'df' in locals():
         del df
-    if 'df_meta' in locals():
-        del df_meta
     gc.collect()
 
-    return train_df, valid_df, test_df, num_items, num_cats, num_stores, max_time
+    return result_df, num_items, num_cats, num_stores, max_time
 
 def load_model_state(model, checkpoint_path):
     checkpoint = torch.load(checkpoint_path)
@@ -95,6 +107,7 @@ def generate_outputs(model, data_loader, device):
         for batch in tqdm(data_loader, desc="Generating Outputs"):
             batch = {k: v.to(device) for k, v in batch.items()}
             weighted_pop_history_output, weighted_time_output, weighted_sideinfo_output, output = model(batch)
+            # print("weighted_pop_history_output\n", weighted_pop_history_output, "weighted_time_output\n", weighted_time_output, "weighted_sideinfo_output\n", weighted_sideinfo_output)
             for i in range(len(batch['item'])):
                 all_outputs.append({
                     'weighted_pop_history_output': weighted_pop_history_output[i].cpu().numpy(),
@@ -105,26 +118,22 @@ def generate_outputs(model, data_loader, device):
     return all_outputs
 
 def main():
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'  
+    os.environ['CUDA_VISIBLE_DEVICES'] = '3'  
     setup_logging()
     dataset_name = config.dataset
-    train_df, valid_df, test_df, num_items, num_cats, num_stores, max_time = load_data(dataset_name)
+    combined_df, num_items, num_cats, num_stores, max_time = load_data(dataset_name)
 
     gc.collect()
-
-    combined_df = pd.concat([train_df, valid_df, test_df])
 
     test_dataset = create_datasets(combined_df, combined_df, combined_df)[2]
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = PopPredict(False, config, num_items, num_cats, num_stores, max_time).to(device)
+    model = PopPredict(config, num_items, num_cats, num_stores, max_time).to(device)
 
-    # date_str = datetime.now().strftime('%Y%m%d')
-    date_str = '0523'
-    best_epoch = '19'
-    latest_checkpoint = f'../../model/pop/{date_str}/{dataset_name}_checkpoint_epoch_{best_epoch}.pt'
+    latest_checkpoint = f'../../model/pop/{dataset_name}/best_model.pt'
+
     if os.path.exists(latest_checkpoint):
         load_model_state(model, latest_checkpoint)
     else:
@@ -134,9 +143,10 @@ def main():
     outputs_df = pd.DataFrame(outputs)
 
     results_df = pd.concat([combined_df.reset_index(drop=True), outputs_df], axis=1)
+    
     results_df['conformity'] = results_df['weighted_pop_history_output'].apply(lambda x: x[0]) + results_df['weighted_time_output'].apply(lambda x: x[0])
     results_df['quality'] = results_df['weighted_sideinfo_output'].apply(lambda x: x[0]) 
-    results_df = results_df[['item_id', 'timestamp', 'conformity', 'quality']]
+    results_df = results_df[['item_encoded', 'unit_time', 'conformity', 'quality']]
 
     result_path = f'../../dataset/{dataset_name}/pop_{dataset_name}.pkl'
     os.makedirs(os.path.dirname(result_path), exist_ok=True)

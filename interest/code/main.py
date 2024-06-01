@@ -8,7 +8,6 @@ import pandas as pd
 import argparse
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
@@ -36,17 +35,21 @@ parser.add_argument("--batch_size", type=int, default=256,
 parser.add_argument("--dropout_rate", type=float, default=0.5,
                     help="dropout rate for model")
 
-parser.add_argument("--embedding_dim", type=int, default=128,
+parser.add_argument("--embedding_dim", type=int, default=64,
                     help="embedding size for embedding vectors")
-parser.add_argument("--hidden_dim", type=int, default=256,
+parser.add_argument("--hidden_dim", type=int, default=128,
                     help="size of the hidden layer embeddings")
 parser.add_argument("--output_dim", type=int, default=1,
                     help="size of the output layer embeddings")
 
-parser.add_argument("--k_m", type=int, default=3*12,
-                    help="length of mid interest")
-parser.add_argument("--k_s", type=int, default=6,
-                    help="length of short interest")
+parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
+                    help="smallest time unit for model training(default: day)")
+parser.add_argument("--pop_time_unit", type=int, default=30*3,
+                    help="smallest time unit for item popularity statistic(default: 3 month)")
+parser.add_argument("--k_m", type=int, default=3*12*30,
+                    help="length of mid interest(default: 3 year)")
+parser.add_argument("--k_s", type=int, default=6*30,
+                    help="length of short interest(default: 6 month)")
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
@@ -59,9 +62,9 @@ parser.add_argument("--test_only", action="store_true",
 parser.add_argument('--no_mid', action="store_true", 
                     help='flag to indicate if model has mid-term module')
 
-parser.add_argument('--discrepancy_loss_weight', type=float, default =0.01, 
+parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01, 
                     help='Loss weight for discrepancy between long and short term user embedding.')
-parser.add_argument('--regularization_weight', type=float, default =0.0001, 
+parser.add_argument('--regularization_weight', type=float, default=0.0001, 
                     help='weight for L2 regularization applied to model parameters')
 
 
@@ -70,17 +73,30 @@ config = Config(args=args)
 
 def setup(rank, world_size, use_cuda):
     if use_cuda:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
+        # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '3'
         os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '12355'
+        os.environ['MASTER_PORT'] = '12356'
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
 def cleanup():
     dist.destroy_process_group()
 
-def setup_logging():
-    logging.basicConfig(filename='../../log.txt', level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s', datefmt='%Y-%m-%d')
+def setup_logging(dataset_name):
+    log_dir = os.path.abspath('../../log')
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    dataset_log_dir = os.path.join(log_dir, dataset_name)
+    if not os.path.exists(dataset_log_dir):
+        os.makedirs(dataset_log_dir)
+
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    log_file = os.path.join(dataset_log_dir, f'{current_date}_log.txt')
+    logging.basicConfig(filename=log_file, level=logging.DEBUG,
+                        format='%(asctime)s:%(levelname)s:%(message)s',
+                        datefmt='%Y-%m-%d')
 
 def load_data(dataset_name):    
     dataset_path = f'../../dataset/{dataset_name}/'
@@ -102,13 +118,9 @@ def load_data(dataset_name):
         num_items = combined_df['item_encoded'].nunique()
         num_cats = combined_df['cat_encoded'].nunique()
 
-        combined_df = combined_df.sort_values(by=['item_encoded', 'unit_time']).reset_index(drop=True)
-        # item_to_cat_dict = dict(zip(combined_df['item_encoded'], combined_df['cat_encoded']))
-        item_to_cat_dict = combined_df.groupby('item_encoded')['cat_encoded'].last().to_dict()
-        item_to_con_dict = combined_df.groupby('item_encoded')['conformity'].last().to_dict()
-        item_to_qlt_dict = combined_df.groupby('item_encoded')['quality'].last().to_dict()
         print("Processed files already exist. Skipping dataset preparation.")
         print(f'df: {len(combined_df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
+
     else:
         try:
             df = load_dataset(review_file_path, type='review')
@@ -119,11 +131,8 @@ def load_data(dataset_name):
             num_items = df['item_id'].nunique()
             num_cats = df_meta['category'].nunique()
             print(f'df: {len(df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
-            df = pd.merge(df, df_meta, on='item_id', how='left')
-            df = pd.merge(df, df_pop, on=['item_id', 'timestamp'], how='inner')
-            print("merged df: \n", df)
-            train_df, valid_df, test_df, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict = preprocess_df(df, config)
 
+            train_df, valid_df, test_df = preprocess_df(df, df_meta, df_pop, config)
             if not os.path.exists(processed_path):
                 os.makedirs(processed_path)
             date_str = datetime.now().strftime('%Y%m%d')
@@ -134,7 +143,7 @@ def load_data(dataset_name):
             logging.error(f"Error during data preparation: {str(e)}")
             raise
     
-    return train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict
+    return train_df, valid_df, test_df, num_users, num_items, num_cats
 
 def main(rank, world_size, use_cuda):
 
@@ -144,10 +153,10 @@ def main(rank, world_size, use_cuda):
 
     setup(rank, world_size, use_cuda)
     if rank == 0:  
-        setup_logging()
+        setup_logging(config.dataset)
         
     print("Data preprocessing......")
-    train_df, valid_df, test_df, num_users, num_items, num_cats, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict = load_data(config.dataset)
+    train_df, valid_df, test_df, num_users, num_items, num_cats = load_data(config.dataset)
 
     print("Create datasets......")
     train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
@@ -175,11 +184,11 @@ def main(rank, world_size, use_cuda):
             train_sampler.set_epoch(epoch)
             if rank == 0:
                 print(f"Rank {rank}, Epoch {epoch+1} -----------------------------------")
-            train_loss = train(model, train_loader, optimizer, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device, rank)
+            train_loss = train(model, train_loader, optimizer, device, rank)
             scheduler.step()
-            valid_loss, valid_accuracy = evaluate(model, valid_loader, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device, rank)
+            valid_loss = evaluate(model, valid_loader, device, rank)
             if rank == 0:                
-                logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Valid Acc: {valid_accuracy}')
+                logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
                 torch.save(model.state_dict(), f'{model_dataset_path}mid_{config.no_mid}_epoch_{epoch}.pt')
             
             early_stopping(valid_loss)
@@ -187,21 +196,22 @@ def main(rank, world_size, use_cuda):
                 print("Early stopping triggered")
                 break
 
-    if rank == 0 and use_cuda:
+    if rank == 0:
         for i in range(config.num_epochs):
             latest_checkpoint = f'{model_dataset_path}mid_{config.no_mid}_epoch_{i}.pt'
             if not os.path.exists(latest_checkpoint):
                 break
             model.load_state_dict(torch.load(latest_checkpoint))
             model.eval()
-            average_loss, all_top_k_items, avg_precision, avg_recall, avg_ndcg, avg_ndcg_2, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device, rank, k=config.k)
-            logging.info(f"epoch_{i}---Test Loss: {average_loss:.4f}, Precision@{config.k}: {avg_precision:.4f}, Recall@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, NDCG@2: {avg_ndcg_2:.4f}, Hit Rate@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+            average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, device, rank, k=config.k)
+            logging.info(f"epoch_{i}---Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.6f}, Rec@{config.k}: {avg_recall:.6f}, NDCG@{config.k}: {avg_ndcg:.6f}, HR@{config.k}: {avg_hit_rate:.6f}, AUC: {avg_auc:.6f}, MRR: {avg_mrr:.6f}")
 
     cleanup()
 
 if __name__ == "__main__":
     # n_gpus = torch.cuda.device_count()
-    n_gpus = 3
+    # n_gpus = 3
+    n_gpus = 1
     if n_gpus > 0:
         print(f"Let's use {n_gpus} GPUs!")
         spawn(main, args=(n_gpus, True), nprocs=n_gpus)

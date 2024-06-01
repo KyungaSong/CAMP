@@ -15,6 +15,7 @@ class ModulePopHistory(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def ema(self, pop_history, item_id):
+        # print("pop_history[0]:\n", pop_history[0])
         if item_id in self.ema_cache:
             return self.ema_cache[item_id]
 
@@ -26,6 +27,7 @@ class ModulePopHistory(nn.Module):
             ema_all[:, t] = (1 - alpha) * ema_all[:, t-1] + alpha * pop_history[:, t]
 
         self.ema_cache[item_id] = ema_all
+        # print("ema_all[0]:\n", ema_all[0])
         return ema_all
 
     def forward(self, pop_history, item_id, time):
@@ -33,6 +35,7 @@ class ModulePopHistory(nn.Module):
         time_before = time - 1
         time_before_clamped = torch.clamp(time_before, min=0)
         history_final = torch.gather(history_ema, 1, time_before_clamped.long().unsqueeze(1))
+        # print("history_final[0]:\n", history_final[0])
         return history_final
 
 class ModuleTime(nn.Module):
@@ -40,15 +43,15 @@ class ModuleTime(nn.Module):
         super(ModuleTime, self).__init__()
         self.config = config
         self.fc_time_value = nn.Linear(config.embedding_dim * 4, 1)
-        self.batch_norm = nn.BatchNorm1d(config.embedding_dim * 4)
+        # self.batch_norm = nn.BatchNorm1d(config.embedding_dim * 4)
         self.relu = nn.ReLU() 
-        self.dropout = nn.Dropout(p=0.6)
+        # self.dropout = nn.Dropout(p=0.3)
 
     def forward(self, item_embeds, time_release_embeds, time_embeds):
         temporal_gap = time_release_embeds - time_embeds
         item_temp_embed = torch.cat((temporal_gap, item_embeds, time_embeds, time_release_embeds), 1)
-        item_temp_embed = self.batch_norm(item_temp_embed)  
-        item_temp_embed = self.dropout(item_temp_embed)
+        # item_temp_embed = self.batch_norm(item_temp_embed)  
+        # item_temp_embed = self.dropout(item_temp_embed)
         time_final = self.relu(self.fc_time_value(item_temp_embed))
         return time_final
 
@@ -57,22 +60,24 @@ class ModuleSideInfo(nn.Module):
         super(ModuleSideInfo, self).__init__()
         self.config = config
         self.fc_output = nn.Linear(2 * config.embedding_dim, 1)
-        self.batch_norm = nn.BatchNorm1d(2 * config.embedding_dim)
-        self.dropout = nn.Dropout(p=0.6)
+        nn.init.constant_(self.fc_output.bias, 0.1)
+        # self.batch_norm = nn.BatchNorm1d(2 * config.embedding_dim)
+        # self.dropout = nn.Dropout(p=0.3)
+        self.relu = nn.ReLU() 
 
     def forward(self, cat_embeds, store_embeds):
         embed_sideinfo = torch.cat((cat_embeds, store_embeds), 1)
-        embed_sideinfo = self.batch_norm(embed_sideinfo)  
-        embed_sideinfo = self.dropout(embed_sideinfo)
+        # embed_sideinfo = self.batch_norm(embed_sideinfo)  
+        # embed_sideinfo = self.dropout(embed_sideinfo)
         embed_sideinfo = self.fc_output(embed_sideinfo)
+        embed_sideinfo = self.relu(embed_sideinfo)
         return embed_sideinfo
 
 class PopPredict(nn.Module):
-    def __init__(self, is_training, config: Config, num_items, num_cats, num_stores, max_time):
+    def __init__(self, config: Config, num_items, num_cats, num_stores, max_time):
         super(PopPredict, self).__init__()
 
         self.config = config
-        self.is_training = is_training
         self.embedding_dim = self.config.embedding_dim
 
         # Embedding layers
@@ -116,12 +121,16 @@ class PopPredict(nn.Module):
         time_output = self.module_time(item_embeds, release_time_embeds, time_embeds)
         sideinfo_output = self.module_sideinfo(cat_embeds, store_embeds)
 
+        # print("weighted_sideinfo_output:", sideinfo_output)
+
         normalized_weights = F.softmax(self.attention_weights, dim=0)
 
         weighted_pop_history_output = pop_history_output * normalized_weights[0]
         weighted_time_output = time_output * normalized_weights[1]
         weighted_sideinfo_output = sideinfo_output * normalized_weights[2]
         output = weighted_pop_history_output + weighted_time_output + weighted_sideinfo_output
+
+        # print("weighted_sideinfo_output:", weighted_sideinfo_output)
 
         # if not self.is_training:
         #     print('Attention weights:', normalized_weights.data.cpu().numpy())

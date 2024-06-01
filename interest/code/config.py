@@ -9,15 +9,15 @@ class Config(object):
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
 
-        self.time_unit = 60*60*24*1000 # a day
-        self.time_range = 30 * self.time_unit # a month
-        self.k_m = args.k_m * self.time_range
-        self.k_s = args.k_s * self.time_range
+        self.time_unit = args.time_unit
+        self.pop_time_unit = args.pop_time_unit * self.time_unit
+        self.k_m = args.k_m * 30 * self.time_unit
+        self.k_s = args.k_s * 30 * self.time_unit
         self.k = args.k
 
         self.train_num_samples = 4
         self.valid_num_samples = 4
-        self.test_num_samples = 49
+        self.test_num_samples = 99
 
         self.dataset = args.dataset
         self.data_preprocessed = args.data_preprocessed

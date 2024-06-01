@@ -1,11 +1,14 @@
+
 log.txt
 pop_log.txt
 data_sampling.py
 test.py
 
+data/*.
 dataset/*
 __pycache__/
 .vscode/
 resource/
 model/*
 results/*
+log/*

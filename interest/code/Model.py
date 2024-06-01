@@ -58,9 +58,9 @@ class MidTermInterestModule(nn.Module):
         for layer in self.mlp:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
-        self.user_transform = nn.Linear(embedding_dim, combined_dim)  # 수정
+        self.user_transform = nn.Linear(embedding_dim, combined_dim)  
         nn.init.xavier_uniform_(self.user_transform.weight)
-        self.user_bn = nn.BatchNorm1d(combined_dim)  # 수정
+        self.user_bn = nn.BatchNorm1d(combined_dim)  
 
         for name, param in self.rnn.named_parameters():
             if 'weight_ih' in name:
@@ -71,7 +71,7 @@ class MidTermInterestModule(nn.Module):
     def forward(self, combined_his_embeds, user_embed):
         o, _ = self.rnn(combined_his_embeds)  # (batch_size, seq_len, hidden_dim)
         h = torch.matmul(o, self.W_m)  # (batch_size, seq_len, combined_dim)
-        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, combined_dim)  # 수정
+        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, combined_dim)  
         user_embed_transformed = self.user_bn(user_embed_transformed)
         user_embed_expanded = user_embed_transformed.unsqueeze(1)  # (batch_size, 1, combined_dim)
 
@@ -105,9 +105,9 @@ class ShortTermInterestModule(nn.Module):
         for layer in self.mlp:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_uniform_(layer.weight)
-        self.user_transform = nn.Linear(embedding_dim, combined_dim)  # 수정
+        self.user_transform = nn.Linear(embedding_dim, combined_dim)  
         nn.init.xavier_uniform_(self.user_transform.weight)
-        self.user_bn = nn.BatchNorm1d(combined_dim)  # 수정
+        self.user_bn = nn.BatchNorm1d(combined_dim)  
 
         # Initialize GRU weights
         for name, param in self.rnn.named_parameters():
@@ -119,7 +119,7 @@ class ShortTermInterestModule(nn.Module):
     def forward(self, combined_his_embeds, user_embed):
         o, _ = self.rnn(combined_his_embeds)  # (batch_size, seq_len, hidden_dim)
         h = torch.matmul(o, self.W_s)  # (batch_size, seq_len, combined_dim)
-        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, combined_dim)  # 수정
+        user_embed_transformed = self.user_transform(user_embed)  # (batch_size, combined_dim)  
         user_embed_transformed = self.user_bn(user_embed_transformed)
         user_embed_expanded = user_embed_transformed.unsqueeze(1)  # (batch_size, 1, combined_dim)
 
@@ -306,7 +306,7 @@ class CAMP(nn.Module):
         self.discrepancy_loss_weight = config.discrepancy_loss_weight
         self.no_mid = config.no_mid
 
-    def forward(self, batch, item_to_cat_dict, item_to_con_dict, item_to_qlt_dict, device):
+    def forward(self, batch, device):
         user_ids = batch['user']
         item_ids = batch['item']
         cat_ids = batch['cat']
@@ -321,10 +321,7 @@ class CAMP(nn.Module):
         else:
             mid_lens = batch['short_len']
         short_lens = batch['short_len']
-        neg_items_ids = batch['neg_items']
-        neg_cats_ids = torch.tensor([[item_to_cat_dict[item.item()] for item in neg_items] for neg_items in neg_items_ids], device=device)
-        neg_cons = torch.tensor([[item_to_con_dict[item.item()] for item in neg_items] for neg_items in neg_items_ids], device=device)
-        neg_qlts = torch.tensor([[item_to_qlt_dict[item.item()] for item in neg_items] for neg_items in neg_items_ids], device=device)
+        labels = batch['label'].float()
 
         user_embeds = self.user_embedding(user_ids)
         item_embeds = self.item_embedding(item_ids)
@@ -335,12 +332,7 @@ class CAMP(nn.Module):
         item_his_embeds = self.item_embedding(items_history_padded)
         cat_his_embeds = self.cat_embedding(cats_history_padded)
         con_his_embeds = self.con_transform(con_his.unsqueeze(-1))
-        qlt_his_embeds = self.qlt_transform(qlt_his.unsqueeze(-1))
-
-        neg_items_embeds = self.item_embedding(neg_items_ids)
-        neg_cats_embeds = self.cat_embedding(neg_cats_ids)        
-        neg_cons_embeds = self.con_transform(neg_cons.unsqueeze(-1))
-        neg_qlts_embeds = self.qlt_transform(neg_qlts.unsqueeze(-1))          
+        qlt_his_embeds = self.qlt_transform(qlt_his.unsqueeze(-1))         
 
         combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds, qlt_his_embeds), dim=-1)
 
@@ -353,25 +345,17 @@ class CAMP(nn.Module):
         p_s = short_term_interest_proxy(combined_his_embeds, short_lens)
         loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, self.no_mid)
 
-        # Negative samples' conformity and quality embeddings
-        y_int_pos = self.interest_fusion_module(combined_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds, self.no_mid)
-        y_int_negs = torch.stack([
-            self.interest_fusion_module(combined_his_embeds, mid_lens, z_l, z_m, z_s, neg_embed.squeeze(1), cat_embed.squeeze(1), con_embed.squeeze(1), qlt_embed.squeeze(1), self.no_mid)
-            for neg_embed, cat_embed, con_embed, qlt_embed in zip(neg_items_embeds.split(1, dim=1), neg_cats_embeds.split(1, dim=1), neg_cons_embeds.split(1, dim=1), neg_qlts_embeds.split(1, dim=1))
-        ], dim=1).squeeze(2)
-
-        loss_bce_pos = self.bce_loss_module(y_int_pos, torch.ones_like(y_int_pos))
-        loss_bce_neg = self.bce_loss_module(y_int_negs, torch.zeros_like(y_int_negs))
-        loss_bce = loss_bce_pos + loss_bce_neg
+        y_int = self.interest_fusion_module(combined_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds, self.no_mid)
+        labels = labels.view(-1, 1)
+        loss_bce = self.bce_loss_module(y_int, labels)
 
         loss_discrepancy = compute_discrepancy_loss(z_l, z_m, self.discrepancy_loss_weight)
         if not self.no_mid:
             loss_discrepancy_ms = compute_discrepancy_loss(z_m, z_s, self.discrepancy_loss_weight)
             loss_discrepancy += loss_discrepancy_ms
 
-        # Regularization loss (L2 loss)
         regularization_loss = self.regularization_weight * sum(torch.norm(param) for param in self.parameters())
 
         loss = loss_con + loss_bce + loss_discrepancy + regularization_loss
-        return loss, y_int_pos, y_int_negs
+        return loss, y_int
 

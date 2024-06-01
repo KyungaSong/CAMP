@@ -11,7 +11,7 @@ def load_dataset(file_path, meta = False):
     if meta:
         necessary_columns = ['average_rating', 'store', 'parent_asin', 'categories']
         df = df[necessary_columns].rename(columns={'average_rating': 'avg_rating', 'parent_asin': 'item_id'})
-        df['category'] = df['categories'].apply(lambda x: x[1] if len(x) > 1 else (x[0] if len(x) == 1 else None))
+        df['category'] = df['categories'].apply(lambda x: x[1] if len(x) > 1 else (x[0] if len(x) == 1 else 'Home & Kitchen'))
     else:        
         df = df.rename(columns={'parent_asin': 'item_id'})          
     return df
@@ -25,7 +25,8 @@ def encode_column(column, pad = False):
     encoded_column = column.map(mapping).fillna(0).astype(int)
     return encoded_column
 
-def preprocess_df(df, config):     
+def preprocess_df(df, config): 
+    df['user_encoded'] = encode_column(df['user_id'])    
     df['item_encoded'] = encode_column(df['item_id'], pad = True)
     df['cat_encoded'] = encode_column(df['category'], pad = True)
     df['store_encoded'] = encode_column(df['store'])    
@@ -49,27 +50,15 @@ def preprocess_df(df, config):
     df_pop = df_pop.reset_index(name='pop_history')
 
     df = df.merge(df_pop, on='item_encoded', how='left')
-    
-    # unique_items = df['item_encoded'].unique()
-    # np.random.shuffle(unique_items)
 
-    # num_items = len(unique_items)
-    # train_end = int(num_items * 0.8)
-    # valid_end = train_end + int(num_items * 0.1)
+    num_users = df['user_encoded'].max() + 1
 
-    # train_items = unique_items[:train_end]
-    # valid_items = unique_items[train_end:valid_end]
-    # test_items = unique_items[valid_end:]
+    train_df = df[df['unit_time'] < max_time - 7]
+    rest_df = df[df['unit_time'] >= max_time - 7].reset_index(drop=True)
+    rest_user_set = np.random.choice(np.arange(num_users), int((num_users)/ 2), replace=False)
+    valid_df = rest_df[rest_df['user_encoded'].isin(rest_user_set)].reset_index(drop=True)
+    test_df = rest_df[~rest_df['user_encoded'].isin(rest_user_set)].reset_index(drop=True)
 
-    # train_df = df[df['item_encoded'].isin(train_items)]
-    # valid_df = df[df['item_encoded'].isin(valid_items)]
-    # test_df = df[df['item_encoded'].isin(test_items)]
-
-    train_df = df[df['unit_time'] < max_time * 0.94]
-    valid_df = df[(df['unit_time'] >= max_time * 0.94) & (df['unit_time'] < max_time * 0.97)]
-    test_df = df[df['unit_time'] >= max_time * 0.97]
-
-    # 비율 계산
     total_length = len(df)
     train_ratio = len(train_df) / total_length
     valid_ratio = len(valid_df) / total_length
