@@ -3,31 +3,20 @@ import pandas as pd
 import numpy as np
 import pickle
 from functools import lru_cache
+import gc  
 import torch
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
+from multiprocessing import Pool
+import itertools 
+
 tqdm.pandas()
 
-def load_dataset(file_path, type='pop'):
+def load_dataset(file_path):
     with open(file_path, 'rb') as file:
-        df = pickle.load(file) 
-    if type == 'meta':
-        necessary_columns = ['parent_asin', 'categories']
-        df = df[necessary_columns].rename(columns={'parent_asin': 'item_id'})
-        df['category'] = df['categories'].apply(lambda x: x[1] if len(x) > 1 else (x[0] if len(x) == 1 else 'Home & Kitchen'))
-    elif type == 'review':
-        df = df.rename(columns={'parent_asin': 'item_id'})                  
+        df = pickle.load(file)                
     return df
-
-def encode_column(column, pad=False):
-    frequencies = column.value_counts(ascending=False)
-    if pad:
-        mapping = pd.Series(index=frequencies.index, data=range(1, len(frequencies) + 1))
-    else:
-        mapping = pd.Series(index=frequencies.index, data=range(len(frequencies)))
-    encoded_column = column.map(mapping).fillna(0).astype(int)
-    return encoded_column
 
 def get_history(group):
     group_array = np.array(group)
@@ -38,8 +27,6 @@ def get_history(group):
     return histories
 
 def calculate_ranges(group, k_m, k_s):
-    if not pd.api.types.is_datetime64_any_dtype(group['timestamp']):
-        group['timestamp'] = pd.to_datetime(group['timestamp'], unit='ms')
     k_m_delta = pd.Timedelta(milliseconds=k_m)
     k_s_delta = pd.Timedelta(milliseconds=k_s)
 
@@ -94,16 +81,22 @@ def expand_and_assign(df, neg_samples_df, col_name, num_samples):
     neg_samples_df = pd.concat([neg_samples_df.reset_index(drop=True), repeated_df.reset_index(drop=True)], axis=1)
     return neg_samples_df
 
-def generate_negative_samples_vectorized(df, df_pop, all_item_ids, num_samples, item_to_cat):
-    positive_items = df['item_encoded'].values
-    histories = df['item_his_encoded_set'].values
-    unit_times = df['unit_time'].values
+def generate_negative_samples_chunk(df_chunk, df_pop, all_item_ids, num_samples, item_to_cat):
+    chunk_neg_samples = []
+    for idx in tqdm(range(len(df_chunk)), desc="Generating negative samples"):
+        neg_samples = generate_negative_samples_for_row(
+            all_item_ids, df_chunk.iloc[idx]['item_encoded'], df_chunk.iloc[idx]['item_his_encoded_set'], num_samples, item_to_cat, df_pop, df_chunk.iloc[idx]['unit_time']
+        )
+        chunk_neg_samples.extend(neg_samples)
+    return chunk_neg_samples
 
-    neg_samples = []
-    for idx in tqdm(range(len(df)), desc="Generating negative samples"):
-        neg_samples.extend(generate_negative_samples_for_row(
-            all_item_ids, positive_items[idx], histories[idx], num_samples, item_to_cat, df_pop, unit_times[idx]
-        ))
+def generate_negative_samples_vectorized_parallel(df, df_pop, all_item_ids, num_samples, item_to_cat, num_workers=16):
+    df_split = np.array_split(df, num_workers)
+    
+    with Pool(num_workers) as pool:
+        results = pool.starmap(generate_negative_samples_chunk, [(chunk, df_pop, all_item_ids, num_samples, item_to_cat) for chunk in df_split])
+    
+    neg_samples = list(itertools.chain.from_iterable(results))
 
     neg_samples_df = pd.DataFrame(neg_samples)
 
@@ -129,16 +122,11 @@ def generate_negative_samples_vectorized(df, df_pop, all_item_ids, num_samples, 
 
     return neg_samples_df
 
-def preprocess_df(df, df_meta, df_pop, config):
-    df = df.merge(df_meta, on='item_id', how='left')
-    df['user_encoded'] = encode_column(df['user_id'])
-    df['item_encoded'] = encode_column(df['item_id'], pad=True)
-    df['cat_encoded'] = encode_column(df['category'], pad=True).astype(int)
+def preprocess_df(df, df_pop, config):
+    df = df.copy()
 
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
 
-    min_time_all = df['timestamp'].min()
-    df['unit_time'] = (df['timestamp'] - min_time_all) // config.pop_time_unit
     max_time = df["unit_time"].max()
     df = df.merge(df_pop, on=['item_encoded', 'unit_time'], how='left')
 
@@ -146,8 +134,6 @@ def preprocess_df(df, df_meta, df_pop, config):
     df['cat_his_encoded'] = df.groupby('user_id')['cat_encoded'].transform(get_history)
     df['con_his'] = df.groupby('user_id')['conformity'].transform(get_history)
     df['qlt_his'] = df.groupby('user_id')['quality'].transform(get_history)
-
-    nan_found = df['item_his_encoded'].apply(lambda x: any(np.isnan(x)))
 
     df['item_his_encoded_set'] = df['item_his_encoded'].apply(set)
     df['label'] = 1
@@ -162,14 +148,9 @@ def preprocess_df(df, df_meta, df_pop, config):
 
     df = df[['user_encoded', 'item_encoded', 'cat_encoded', 'conformity', 'quality', 'item_his_encoded', 'item_his_encoded_set', 'cat_his_encoded', 'con_his', 'qlt_his', 'unit_time', 'mid_len', 'short_len', 'label']]
 
-    num_users = df['user_encoded'].max() + 1
-
-    train_df = df[df['unit_time'] < max_time - 7]
-    rest_df = df[df['unit_time'] >= max_time - 7].reset_index(drop=True)
-
-    rest_user_set = np.random.choice(np.arange(num_users + 1), int((num_users + 1) / 2), replace=False)
-    valid_df = rest_df[rest_df['user_encoded'].isin(rest_user_set)].reset_index(drop=True)
-    test_df = rest_df[~rest_df['user_encoded'].isin(rest_user_set)].reset_index(drop=True)
+    train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
+    valid_df = df[df['unit_time'] == max_time - 1].reset_index(drop=True)
+    test_df = df[df['unit_time'] == max_time].reset_index(drop=True)
 
     total_length = len(df)
     train_ratio = len(train_df) / total_length
@@ -178,16 +159,22 @@ def preprocess_df(df, df_meta, df_pop, config):
 
     print(f"Train ratio: {train_ratio:.2f}, Valid ratio: {valid_ratio:.2f}, Test ratio: {test_ratio:.2f}")
 
+    del df
+    gc.collect()
+
     print("Generating negative samples for train dataset")
-    train_neg_df = generate_negative_samples_vectorized(train_df, df_pop, all_item_ids, config.train_num_samples, item_to_cat)
+    train_neg_df = generate_negative_samples_vectorized_parallel(train_df, df_pop, all_item_ids, config.train_num_samples, item_to_cat)
     print("Generating negative samples for valid dataset")
-    valid_neg_df = generate_negative_samples_vectorized(valid_df, df_pop, all_item_ids, config.valid_num_samples, item_to_cat)
+    valid_neg_df = generate_negative_samples_vectorized_parallel(valid_df, df_pop, all_item_ids, config.valid_num_samples, item_to_cat)
     print("Generating negative samples for test dataset")
-    test_neg_df = generate_negative_samples_vectorized(test_df, df_pop, all_item_ids, config.test_num_samples, item_to_cat)
+    test_neg_df = generate_negative_samples_vectorized_parallel(test_df, df_pop, all_item_ids, config.test_num_samples, item_to_cat)
 
     train_df = pd.concat([train_df, train_neg_df], ignore_index=True)
     valid_df = pd.concat([valid_df, valid_neg_df], ignore_index=True)
     test_df = pd.concat([test_df, test_neg_df], ignore_index=True)
+
+    del train_neg_df, valid_neg_df, test_neg_df
+    gc.collect()
 
     return train_df, valid_df, test_df
 

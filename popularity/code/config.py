@@ -15,6 +15,10 @@ class Config(object):
         self.test_only = args.test_only
         self.num_epochs = args.num_epochs
         self.embedding_dim = args.embedding_dim
+
+        self.wt_pop = args.wt_pop 
+        self.wt_time = args.wt_time 
+        self.wt_side = args.wt_side 
         
 
         

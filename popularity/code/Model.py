@@ -7,15 +7,22 @@ torch.manual_seed(2024)
 torch.cuda.manual_seed(2024)
 
 class ModulePopHistory(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: Config):
         super(ModulePopHistory, self).__init__()
         self.config = config
         self.alpha = self.config.alpha
         self.ema_cache = {}
         self.sigmoid = nn.Sigmoid()
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)  
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.1)
 
     def ema(self, pop_history, item_id):
-        # print("pop_history[0]:\n", pop_history[0])
         if item_id in self.ema_cache:
             return self.ema_cache[item_id]
 
@@ -60,6 +67,7 @@ class ModuleSideInfo(nn.Module):
         super(ModuleSideInfo, self).__init__()
         self.config = config
         self.fc_output = nn.Linear(2 * config.embedding_dim, 1)
+        nn.init.xavier_uniform_(self.fc_output.weight) 
         nn.init.constant_(self.fc_output.bias, 0.1)
         # self.batch_norm = nn.BatchNorm1d(2 * config.embedding_dim)
         # self.dropout = nn.Dropout(p=0.3)
@@ -83,7 +91,7 @@ class PopPredict(nn.Module):
         # Embedding layers
         self.item_embedding = nn.Embedding(num_items + 1, self.embedding_dim, padding_idx=0)
         self.cat_embedding = nn.Embedding(num_cats + 1, self.embedding_dim, padding_idx=0)
-        self.store_embedding = nn.Embedding(num_stores, self.embedding_dim)
+        self.store_embedding = nn.Embedding(num_stores + 1, self.embedding_dim)
         self.time_embedding = nn.Embedding(max_time + 1, self.embedding_dim)
 
         # Modules
@@ -126,6 +134,7 @@ class PopPredict(nn.Module):
         normalized_weights = F.softmax(self.attention_weights, dim=0)
 
         weighted_pop_history_output = pop_history_output * normalized_weights[0]
+        # weighted_pop_history_output = (pop_history_output - pop_history_output.mean()) / pop_history_output.std() * normalized_weights[0]
         weighted_time_output = time_output * normalized_weights[1]
         weighted_sideinfo_output = sideinfo_output * normalized_weights[2]
         output = weighted_pop_history_output + weighted_time_output + weighted_sideinfo_output

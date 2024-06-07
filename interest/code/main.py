@@ -11,10 +11,6 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.multiprocessing import spawn
-from torch.utils.data.distributed import DistributedSampler
 
 from config import Config
 from preprocess import load_dataset, preprocess_df, create_datasets
@@ -30,7 +26,7 @@ parser.add_argument("--lr", type=float, default=0.001,
                     help="learning rate")
 parser.add_argument("--num_epochs", type=int, default=30,
                     help="training epochs")
-parser.add_argument("--batch_size", type=int, default=256,
+parser.add_argument("--batch_size", type=int, default=128,
                     help="batch size for training")
 parser.add_argument("--dropout_rate", type=float, default=0.5,
                     help="dropout rate for model")
@@ -53,7 +49,7 @@ parser.add_argument("--k_s", type=int, default=6*30,
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
-parser.add_argument("--dataset", type=str, default='sampled_Home_and_Kitchen',
+parser.add_argument("--dataset", type=str, default='Sports_and_Outdoors',
                     help="dataset file name")
 parser.add_argument("--data_preprocessed", action="store_true",
                     help="flag to indicate if the input data has already been preprocessed")
@@ -61,6 +57,10 @@ parser.add_argument("--test_only", action="store_true",
                     help="flag to indicate if only testing should be performed")
 parser.add_argument('--no_mid', action="store_true", 
                     help='flag to indicate if model has mid-term module')
+parser.add_argument('--no_con', action="store_true", 
+                    help='flag to indicate if model has conformity module')
+parser.add_argument('--no_qlt', action="store_true", 
+                    help='flag to indicate if model has quality module')
 
 parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01, 
                     help='Loss weight for discrepancy between long and short term user embedding.')
@@ -70,18 +70,6 @@ parser.add_argument('--regularization_weight', type=float, default=0.0001,
 
 args = parser.parse_args()
 config = Config(args=args)
-
-def setup(rank, world_size, use_cuda):
-    if use_cuda:
-        # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2'
-        os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-        os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '12356'
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
-        torch.cuda.set_device(rank)
-
-def cleanup():
-    dist.destroy_process_group()
 
 def setup_logging(dataset_name):
     log_dir = os.path.abspath('../../log')
@@ -101,9 +89,8 @@ def setup_logging(dataset_name):
 def load_data(dataset_name):    
     dataset_path = f'../../dataset/{dataset_name}/'
     review_file_path = f'{dataset_path}{dataset_name}.pkl'
-    meta_file_path = f'{dataset_path}meta_{dataset_name}.pkl'
-    processed_path = f'../../dataset/preprocessed/{dataset_name}/'
-    pop_file_path = f'../../dataset/{dataset_name}/pop_{dataset_name}.pkl'
+    pop_file_path = f'{dataset_path}pop_{dataset_name}.pkl'
+    processed_path = f'{dataset_path}preprocessed/'
 
     if os.path.exists(f'{processed_path}/train_df.pkl') and os.path.exists(f'{processed_path}/valid_df.pkl') and os.path.exists(f'{processed_path}/test_df.pkl') and config.data_preprocessed:
         with open(f'{processed_path}/train_df.pkl', 'rb') as file:
@@ -114,107 +101,133 @@ def load_data(dataset_name):
             test_df = pickle.load(file)
         
         combined_df = pd.concat([train_df, valid_df, test_df])
-        num_users = combined_df['user_encoded'].nunique()
-        num_items = combined_df['item_encoded'].nunique()
-        num_cats = combined_df['cat_encoded'].nunique()
+        num_users = combined_df['user_encoded'].max() + 1
+        num_items = combined_df['item_encoded'].max() + 1
+        num_cats = combined_df['cat_encoded'].max() + 1
 
         print("Processed files already exist. Skipping dataset preparation.")
         print(f'df: {len(combined_df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
 
     else:
         try:
-            df = load_dataset(review_file_path, type='review')
-            df_meta = load_dataset(meta_file_path, type='meta')
-            df_pop = load_dataset(pop_file_path, type='pop')
+            df = load_dataset(review_file_path)
+            df_pop = load_dataset(pop_file_path)
 
-            num_users = df['user_id'].nunique()
-            num_items = df['item_id'].nunique()
-            num_cats = df_meta['category'].nunique()
+            num_users = df['user_encoded'].max() + 1
+            num_items = df['item_encoded'].max() + 1
+            num_cats = df['cat_encoded'].max() + 1
             print(f'df: {len(df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
 
-            train_df, valid_df, test_df = preprocess_df(df, df_meta, df_pop, config)
+            train_df, valid_df, test_df = preprocess_df(df, df_pop, config)
             if not os.path.exists(processed_path):
                 os.makedirs(processed_path)
             date_str = datetime.now().strftime('%Y%m%d')
-            train_df.to_pickle(f'{processed_path}/train_df_{date_str}_{num_users}_{num_items}.pkl')
-            valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}_{num_users}_{num_items}.pkl')
-            test_df.to_pickle(f'{processed_path}/test_df_{date_str}_{num_users}_{num_items}.pkl')
+            train_df.to_pickle(f'{processed_path}/train_df_{date_str}.pkl')
+            valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}.pkl')
+            test_df.to_pickle(f'{processed_path}/test_df_{date_str}.pkl')
         except Exception as e:
             logging.error(f"Error during data preparation: {str(e)}")
             raise
     
     return train_df, valid_df, test_df, num_users, num_items, num_cats
 
-def main(rank, world_size, use_cuda):
+def main():
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
     model_dataset_path = f'{config.model_path}{config.dataset}/'
     if not os.path.exists(model_dataset_path):
             os.makedirs(model_dataset_path)
 
-    setup(rank, world_size, use_cuda)
-    if rank == 0:  
-        setup_logging(config.dataset)
+    setup_logging(config.dataset)
         
-    print("Data preprocessing......")
+    print(f"Data preprocessing for dataset {config.dataset}......")
     train_df, valid_df, test_df, num_users, num_items, num_cats = load_data(config.dataset)
 
     print("Create datasets......")
     train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
 
     print("Making Data loader......")
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    valid_sampler = DistributedSampler(valid_dataset, num_replicas=world_size, rank=rank)
-    test_sampler = DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=config.batch_size)
+    test_loader = DataLoader(test_dataset, batch_size=config.batch_size)
 
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, sampler=train_sampler, drop_last=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=config.batch_size, sampler=valid_sampler)
-    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, sampler=test_sampler)
-
-    device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
-    model = CAMP(num_users, num_items, num_cats, config).to(device)
-    model = DDP(model, device_ids=[rank]) if use_cuda else model    
+    # device = torch.device(f"cuda:{rank}" if use_cuda else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    # model = DDP(model, device_ids=[rank]) if use_cuda else model    
+    
+    # learning_rates = [0.01, 0.001, 0.0001]
+    # batch_sizes = [64, 128]
+    # embedding_dims = [64, 128]
+    learning_rates = [0.01]
+    batch_sizes = [64]
+    embedding_dims = [64]
+
+    best_loss = float('inf')
+    best_model_params = {}
+    best_model = None
+
     if not config.test_only:
-        optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=1e-5)
-        scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
-        early_stopping = EarlyStopping(patience=10, verbose=True)
+        for lr in learning_rates:
+            for batch_size in batch_sizes:
+                for embedding_dim in embedding_dims:
+                    print(f"{config.dataset}_no_mid_{config.no_mid}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
+
+                    config.lr = lr
+                    config.batch_size = batch_size
+                    config.embedding_dim = embedding_dim                      
+
+                    model = CAMP(num_users, num_items, num_cats, config).to(device)
+                    optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=1e-5)
+                    scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+                    early_stopping = EarlyStopping(patience=10, verbose=True)
+
+                    for epoch in range(config.num_epochs):
+                        train_loss = train(model, train_loader, optimizer, device)                            
+                        valid_loss = evaluate(model, valid_loader, device)
+                        scheduler.step()
+
+                        logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
+                        if valid_loss < best_loss:
+                            best_loss = valid_loss
+                            best_model_params = {'lr': config.lr, 'batch_size': config.batch_size, 'embedding_dim': config.embedding_dim, 'epoch': epoch}
+                            best_model = model.state_dict()
+
+                        early_stopping(valid_loss)
+                        if early_stopping.early_stop:
+                            print("Early stopping triggered")
+                            break
+
+        if best_model is not None:
+            print(f"Best Model Parameters: {best_model_params}")
+            date_str = datetime.now().strftime('%y%m%d')
+            config.embedding_dim = best_model_params['embedding_dim']
+            model = CAMP(num_users, num_items, num_cats, config).to(device)
+            model.load_state_dict(best_model)
+            model_save_path = f'../../model/{config.dataset}/'
+            final_save_path = f'{model_save_path}{date_str}_best_model.pt'
+            if not os.path.exists(os.path.dirname(model_save_path)):
+                os.makedirs(os.path.dirname(model_save_path))
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'embedding_dim': best_model_params['embedding_dim'],  # Save the best embedding dimension
+                'lr': best_model_params['lr'],
+                'batch_size': best_model_params['batch_size']
+            }, final_save_path)
+    else:
+        date_str = input("Enter the date string of the saved model (format: yymmdd): ")
+        model_path = f'../../model/{config.dataset}/{date_str}_best_model.pt'
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path)
+            config.embedding_dim = checkpoint['embedding_dim']
+            model = CAMP(num_users, num_items, num_cats, config).to(device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Loaded model from {model_path}")
+        else:
+            raise FileNotFoundError(f"No model found at {model_path}")
         
-        logging.info(f"{config.dataset}_no_mid_{config.no_mid}-----------------------------------------------------------------------------------")
-        for epoch in range(config.num_epochs):
-            train_sampler.set_epoch(epoch)
-            if rank == 0:
-                print(f"Rank {rank}, Epoch {epoch+1} -----------------------------------")
-            train_loss = train(model, train_loader, optimizer, device, rank)
-            scheduler.step()
-            valid_loss = evaluate(model, valid_loader, device, rank)
-            if rank == 0:                
-                logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
-                torch.save(model.state_dict(), f'{model_dataset_path}mid_{config.no_mid}_epoch_{epoch}.pt')
-            
-            early_stopping(valid_loss)
-            if early_stopping.early_stop:
-                print("Early stopping triggered")
-                break
-
-    if rank == 0:
-        for i in range(config.num_epochs):
-            latest_checkpoint = f'{model_dataset_path}mid_{config.no_mid}_epoch_{i}.pt'
-            if not os.path.exists(latest_checkpoint):
-                break
-            model.load_state_dict(torch.load(latest_checkpoint))
-            model.eval()
-            average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, device, rank, k=config.k)
-            logging.info(f"epoch_{i}---Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.6f}, Rec@{config.k}: {avg_recall:.6f}, NDCG@{config.k}: {avg_ndcg:.6f}, HR@{config.k}: {avg_hit_rate:.6f}, AUC: {avg_auc:.6f}, MRR: {avg_mrr:.6f}")
-
-    cleanup()
+    average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, device, k=config.k)
+    logging.info(f"Best Model --- Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.4f}, Rec@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, HR@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 
 if __name__ == "__main__":
-    # n_gpus = torch.cuda.device_count()
-    # n_gpus = 3
-    n_gpus = 1
-    if n_gpus > 0:
-        print(f"Let's use {n_gpus} GPUs!")
-        spawn(main, args=(n_gpus, True), nprocs=n_gpus)
-    else:
-        main(rank=0, world_size=1, use_cuda=False)
-    
+    main()

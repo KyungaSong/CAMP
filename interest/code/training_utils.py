@@ -6,16 +6,11 @@ import torch.optim as optim
 from evaluate import precision_at_k, recall_at_k, ndcg_at_k, hit_rate_at_k
 from sklearn.metrics import roc_auc_score
 
-def train(model, data_loader, optimizer, device, rank):
+def train(model, data_loader, optimizer, device):
     model.train()
     total_loss = 0
 
-    if rank == 0:
-        pbar = tqdm(data_loader, desc="Training")
-    else:
-        pbar = data_loader
-
-    for batch in pbar:
+    for batch in tqdm(data_loader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
         
@@ -30,17 +25,12 @@ def train(model, data_loader, optimizer, device, rank):
     return average_loss
 
 # 3) Evaluating
-def evaluate(model, data_loader, device, rank):
+def evaluate(model, data_loader, device):
     model.eval()
     total_loss = 0
 
-    if rank == 0:
-        pbar = tqdm(data_loader, desc="Evaluating")
-    else:
-        pbar = data_loader
-
     with torch.no_grad():
-        for batch in pbar:
+        for batch in tqdm(data_loader, desc="Evaluating"):
             batch = {k: v.to(device) for k, v in batch.items()}
 
             loss, _ = model(batch, device)
@@ -124,7 +114,7 @@ def evaluate(model, data_loader, device, rank):
 #     print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 #     return average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr
 
-def test(model, data_loader, device, rank, k=10):
+def test(model, data_loader, device, k=10):
     model.eval()  
     total_loss = 0
     precision_scores = []
@@ -134,16 +124,13 @@ def test(model, data_loader, device, rank, k=10):
     auc_scores = []
     mrr_scores = []
 
-    if rank == 0:
-        pbar = tqdm(data_loader, desc="Testing")
-    else:
-        pbar = data_loader
-
     all_predictions = []
     all_labels = []
+    all_user_ids = []
+    all_item_ids = []
 
     with torch.no_grad():
-        for batch in pbar:
+        for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
             
             loss, y_int = model(batch, device)
@@ -153,60 +140,60 @@ def test(model, data_loader, device, rank, k=10):
             user_ids = batch['user']
             y_int = y_int.view(-1)  # Flatten y_int for easier processing
 
-            # Collect all predictions and labels
+            # Collect all predictions, labels, user_ids and item_ids
             all_predictions.extend(y_int.cpu().numpy())
             all_labels.extend(batch['label'].cpu().numpy())
+            all_user_ids.extend(user_ids.cpu().numpy())
+            all_item_ids.extend(batch['item'].cpu().numpy())
 
-            # Group predictions by user
-            predictions_by_user = {}
-            labels_by_user = {}
-            items_by_user = {}
-            for i, user_id in enumerate(user_ids):
-                if user_id.item() not in predictions_by_user:
-                    predictions_by_user[user_id.item()] = []
-                    labels_by_user[user_id.item()] = []
-                    items_by_user[user_id.item()] = []
-                predictions_by_user[user_id.item()].append(y_int[i].item())
-                labels_by_user[user_id.item()].append(batch['label'][i].item())
-                items_by_user[user_id.item()].append(batch['item'][i].item())
+    # Group predictions, labels, and items by user
+    from collections import defaultdict
+    predictions_by_user = defaultdict(list)
+    labels_by_user = defaultdict(list)
+    items_by_user = defaultdict(list)
 
-            # Calculate metrics per user
-            for user_id in predictions_by_user.keys():
-                user_predictions = predictions_by_user[user_id]
-                user_labels = labels_by_user[user_id]
-                user_items = items_by_user[user_id]
+    for pred, label, user_id, item_id in zip(all_predictions, all_labels, all_user_ids, all_item_ids):
+        predictions_by_user[user_id].append(pred)
+        labels_by_user[user_id].append(label)
+        items_by_user[user_id].append(item_id)
 
-                # Sort by prediction score
-                sorted_indices = np.argsort(user_predictions)[::-1]
-                top_k_items = [user_items[i] for i in sorted_indices[:k]]
-                actual_items = [user_items[i] for i in range(len(user_labels)) if user_labels[i] == 1]
+    # Calculate metrics per user
+    for user_id in predictions_by_user.keys():
+        user_predictions = predictions_by_user[user_id]
+        user_labels = labels_by_user[user_id]
+        user_items = items_by_user[user_id]
 
-                hits = [item in actual_items for item in top_k_items]
+        # Sort by prediction score
+        sorted_indices = np.argsort(user_predictions)[::-1]
+        top_k_items = [user_items[i] for i in sorted_indices[:k]]
+        actual_items = [user_items[i] for i in range(len(user_labels)) if user_labels[i] == 1]
 
-                precision = sum(hits) / k
-                recall = sum(hits) / len(actual_items) if actual_items else 0
-                hit_rate = 1 if sum(hits) > 0 else 0
+        hits = [item in actual_items for item in top_k_items]
 
-                # NDCG@k
-                dcg = sum(hit / np.log2(idx + 2) for idx, hit in enumerate(hits))
-                idcg = sum(1.0 / np.log2(idx + 2) for idx in range(min(len(actual_items), k)))
-                ndcg = dcg / idcg if idcg > 0 else 0
+        precision = sum(hits) / k
+        recall = sum(hits) / len(actual_items) if actual_items else 0
+        hit_rate = 1 if sum(hits) > 0 else 0
 
-                # AUC
-                y_true = user_labels
-                y_scores = user_predictions
-                auc_score = roc_auc_score(y_true, y_scores) if len(set(y_true)) > 1 else 0
+        # NDCG@k
+        dcg = sum(hit / np.log2(idx + 2) for idx, hit in enumerate(hits))
+        idcg = sum(1.0 / np.log2(idx + 2) for idx in range(min(len(actual_items), k)))
+        ndcg = dcg / idcg if idcg > 0 else 0
 
-                # MRR
-                ranks = [idx + 1 for idx, hit in enumerate(hits) if hit]
-                mrr = (1.0 / ranks[0]) if ranks else 0
+        # AUC
+        y_true = user_labels
+        y_scores = user_predictions
+        auc_score = roc_auc_score(y_true, y_scores) if len(set(y_true)) > 1 else 0
 
-                precision_scores.append(precision)
-                recall_scores.append(recall)
-                ndcg_scores.append(ndcg)
-                hit_rates.append(hit_rate)
-                auc_scores.append(auc_score)
-                mrr_scores.append(mrr)
+        # MRR
+        ranks = [idx + 1 for idx, hit in enumerate(hits) if hit]
+        mrr = (1.0 / ranks[0]) if ranks else 0
+
+        precision_scores.append(precision)
+        recall_scores.append(recall)
+        ndcg_scores.append(ndcg)
+        hit_rates.append(hit_rate)
+        auc_scores.append(auc_score)
+        mrr_scores.append(mrr)
 
     average_loss = total_loss / len(data_loader)
     avg_precision = np.mean(precision_scores)

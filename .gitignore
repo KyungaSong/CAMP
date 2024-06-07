@@ -12,3 +12,5 @@ resource/
 model/*
 results/*
 log/*
+pop_log/*
+sampling/*

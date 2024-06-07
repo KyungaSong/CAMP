@@ -11,13 +11,13 @@ class Config(object):
 
         self.time_unit = args.time_unit
         self.pop_time_unit = args.pop_time_unit * self.time_unit
-        self.k_m = args.k_m * 30 * self.time_unit
-        self.k_s = args.k_s * 30 * self.time_unit
+        self.k_m = args.k_m * self.time_unit
+        self.k_s = args.k_s * self.time_unit
         self.k = args.k
 
         self.train_num_samples = 4
         self.valid_num_samples = 4
-        self.test_num_samples = 99
+        self.test_num_samples = 49
 
         self.dataset = args.dataset
         self.data_preprocessed = args.data_preprocessed
@@ -27,6 +27,8 @@ class Config(object):
         self.discrepancy_loss_weight = args.discrepancy_loss_weight
 
         self.no_mid = args.no_mid
+        self.no_con = args.no_con
+        self.no_qlt = args.no_qlt
 
         self.model_path = f'../../model/'
         
