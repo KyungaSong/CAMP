@@ -2,21 +2,21 @@ import random
 import pandas as pd
 import numpy as np
 import pickle
-from functools import lru_cache
 import gc  
 import torch
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
 from multiprocessing import Pool
-import itertools 
+from itertools import chain
+import multiprocessing as mp
 
 tqdm.pandas()
 
-def load_dataset(file_path):
+def load_file(file_path):
     with open(file_path, 'rb') as file:
-        df = pickle.load(file)                
-    return df
+        result = pickle.load(file)                
+    return result
 
 def get_history(group):
     group_array = np.array(group)
@@ -96,7 +96,7 @@ def generate_negative_samples_vectorized_parallel(df, df_pop, all_item_ids, num_
     with Pool(num_workers) as pool:
         results = pool.starmap(generate_negative_samples_chunk, [(chunk, df_pop, all_item_ids, num_samples, item_to_cat) for chunk in df_split])
     
-    neg_samples = list(itertools.chain.from_iterable(results))
+    neg_samples = list(chain.from_iterable(results))
 
     neg_samples_df = pd.DataFrame(neg_samples)
 
@@ -122,6 +122,65 @@ def generate_negative_samples_vectorized_parallel(df, df_pop, all_item_ids, num_
 
     return neg_samples_df
 
+def split_list(data, n):
+    """Splits data into n chunks."""
+    k, m = divmod(len(data), n)
+    return [data[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
+
+def generate_test_samples_for_user_group(user_group, all_item_ids, item_to_cat, df_pop):
+    samples = []
+    for user_encoded, group in user_group:
+        group = group.sort_values(by='timestamp')
+
+        item_his_encoded_set = set(chain.from_iterable(group['item_his_encoded']))
+        user_items = set(group['item_encoded'])
+        candidate_items = list(all_item_ids - item_his_encoded_set - user_items)
+        
+        for item in candidate_items:
+            pop_row = df_pop[(df_pop['item_encoded'] == item) & (df_pop['unit_time'] == group['unit_time'].iloc[-1])]
+            if not pop_row.empty:
+                pop_row = pop_row.iloc[0]
+                conformity = pop_row['conformity']
+                quality = pop_row['quality']
+                cat_encoded = item_to_cat.get(item, 0)
+                samples.append({
+                    'user_encoded': user_encoded,
+                    'item_encoded': item,
+                    'cat_encoded': int(cat_encoded),
+                    'conformity': conformity,
+                    'quality': quality,
+                    'item_his_encoded_set': item_his_encoded_set,
+                    'unit_time': group['unit_time'].iloc[-1],
+                    'mid_len': group['mid_len'].iloc[-1],
+                    'short_len': group['short_len'].iloc[-1],
+                    'label': 0,
+                    'item_his_encoded': group['item_his_encoded'].iloc[-1],
+                    'cat_his_encoded': group['cat_his_encoded'].iloc[-1],
+                    'con_his': group['con_his'].iloc[-1],
+                    'qlt_his': group['qlt_his'].iloc[-1]
+                })
+    return samples
+
+def generate_test_samples_chunk(user_groups_chunk, all_item_ids, item_to_cat, df_pop):
+    chunk_samples = []
+    for user_group in tqdm(user_groups_chunk, desc="Generating test samples"):
+        samples = generate_test_samples_for_user_group([user_group], all_item_ids, item_to_cat, df_pop)
+        chunk_samples.extend(samples)
+    return chunk_samples
+
+def generate_test_samples_vectorized_parallel(df, all_item_ids, item_to_cat, df_pop, num_workers=16):
+    user_groups = list(df.groupby('user_encoded'))
+    user_groups_split = split_list(user_groups, num_workers)
+    
+    with Pool(num_workers) as pool:
+        results = pool.starmap(generate_test_samples_chunk, [(chunk, all_item_ids, item_to_cat, df_pop) for chunk in user_groups_split])
+    
+    test_samples = list(chain.from_iterable(results))
+
+    test_samples_df = pd.DataFrame(test_samples)
+
+    return test_samples_df
+
 def preprocess_df(df, df_pop, config):
     df = df.copy()
 
@@ -146,7 +205,7 @@ def preprocess_df(df, df_pop, config):
     ranges_df.reset_index(drop=True, inplace=True)
     df = pd.concat([df, ranges_df], axis=1)
 
-    df = df[['user_encoded', 'item_encoded', 'cat_encoded', 'conformity', 'quality', 'item_his_encoded', 'item_his_encoded_set', 'cat_his_encoded', 'con_his', 'qlt_his', 'unit_time', 'mid_len', 'short_len', 'label']]
+    df = df[['user_encoded', 'item_encoded', 'cat_encoded', 'conformity', 'quality', 'item_his_encoded', 'item_his_encoded_set', 'cat_his_encoded', 'con_his', 'qlt_his', 'timestamp', 'unit_time', 'mid_len', 'short_len', 'label']]
 
     train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
     valid_df = df[df['unit_time'] == max_time - 1].reset_index(drop=True)
@@ -166,15 +225,18 @@ def preprocess_df(df, df_pop, config):
     train_neg_df = generate_negative_samples_vectorized_parallel(train_df, df_pop, all_item_ids, config.train_num_samples, item_to_cat)
     print("Generating negative samples for valid dataset")
     valid_neg_df = generate_negative_samples_vectorized_parallel(valid_df, df_pop, all_item_ids, config.valid_num_samples, item_to_cat)
-    print("Generating negative samples for test dataset")
-    test_neg_df = generate_negative_samples_vectorized_parallel(test_df, df_pop, all_item_ids, config.test_num_samples, item_to_cat)
+    # print("Generating negative samples for test dataset")
+    # test_neg_df = generate_negative_samples_vectorized_parallel(test_df, df_pop, all_item_ids, config.test_num_samples, item_to_cat)
+    print("Generating test samples for test dataset")
+    test_can_df = generate_test_samples_vectorized_parallel(test_df, all_item_ids, item_to_cat, df_pop)
 
     train_df = pd.concat([train_df, train_neg_df], ignore_index=True)
     valid_df = pd.concat([valid_df, valid_neg_df], ignore_index=True)
-    test_df = pd.concat([test_df, test_neg_df], ignore_index=True)
+    test_df = pd.concat([test_df, test_can_df], ignore_index=True)
 
-    del train_neg_df, valid_neg_df, test_neg_df
+    del train_neg_df, valid_neg_df, test_can_df
     gc.collect()
+    torch.cuda.empty_cache()
 
     return train_df, valid_df, test_df
 
@@ -214,19 +276,23 @@ class MakeDataset(Dataset):
         return data
 
 def create_datasets(train_df, valid_df, test_df):
+    print("making train dataset")
     train_dataset = MakeDataset(
         train_df['user_encoded'], train_df['item_encoded'], train_df['cat_encoded'], train_df['conformity'], train_df['quality'],
         train_df['item_his_encoded'], train_df['cat_his_encoded'],  train_df['con_his'], train_df['qlt_his'], 
         train_df['mid_len'], train_df['short_len'], train_df['label']
     )
+    print("making valid dataset")
     valid_dataset = MakeDataset(
         valid_df['user_encoded'], valid_df['item_encoded'], valid_df['cat_encoded'], valid_df['conformity'], valid_df['quality'],
         valid_df['item_his_encoded'], valid_df['cat_his_encoded'], valid_df['con_his'], valid_df['qlt_his'], 
         valid_df['mid_len'], valid_df['short_len'], valid_df['label']
     )
+    print("making test dataset")
     test_dataset = MakeDataset(
         test_df['user_encoded'], test_df['item_encoded'], test_df['cat_encoded'], test_df['conformity'], test_df['quality'],
         test_df['item_his_encoded'], test_df['cat_his_encoded'], test_df['con_his'], test_df['qlt_his'], 
         test_df['mid_len'], test_df['short_len'], test_df['label']
-    )
+    )   
+    print("create datasets done!") 
     return train_dataset, valid_dataset, test_dataset

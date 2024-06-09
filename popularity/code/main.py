@@ -187,9 +187,14 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    lr_values = [0.001, 0.0001, 0.01]  # Learning rates to try
+    lr_values = [0.0001, 0.001, 0.01]  # Learning rates to try
     batch_size_values = [16, 32, 64]  # Batch sizes to try
     embedding_dim_values = [64, 128, 256]  # Embedding dimensions to try
+
+    # # Toys_and_Games
+    # lr: 0.001, batch_size: 16, embedding_dim: 64
+    # Sports_and_Outdoors
+    # Best Model Parameters: {'lr': 0.0001, 'batch_size': 16, 'embedding_dim': 128, 'epoch': 0}
 
     best_loss = float('inf')
     best_model_params = {}

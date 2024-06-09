@@ -114,7 +114,7 @@ def evaluate(model, data_loader, device):
 #     print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 #     return average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr
 
-def test(model, data_loader, device, k=10):
+def test(model, data_loader, device, inv, k=10):
     model.eval()  
     total_loss = 0
     precision_scores = []
@@ -133,6 +133,8 @@ def test(model, data_loader, device, k=10):
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
             
+            if inv == 'zero':
+                batch['con'].zero_()
             loss, y_int = model(batch, device)
             loss = loss.mean()
             total_loss += loss.item()

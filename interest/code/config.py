@@ -20,7 +20,7 @@ class Config(object):
         self.test_num_samples = 49
 
         self.dataset = args.dataset
-        self.data_preprocessed = args.data_preprocessed
+        self.df_preprocessed = args.df_preprocessed
         self.test_only = args.test_only
 
         self.regularization_weight = args.regularization_weight
@@ -29,6 +29,8 @@ class Config(object):
         self.no_mid = args.no_mid
         self.no_con = args.no_con
         self.no_qlt = args.no_qlt
+
+        self.inv = args.inv
 
         self.model_path = f'../../model/'
         
