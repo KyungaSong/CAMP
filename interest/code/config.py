@@ -33,5 +33,7 @@ class Config(object):
         self.inv = args.inv
 
         self.model_path = f'../../model/'
+
+        self.cuda_device = args.cuda_device
         
         

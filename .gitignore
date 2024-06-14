@@ -13,4 +13,5 @@ model/*
 results/*
 log/*
 pop_log/*
-sampling/*
+sampling/
+analysis/

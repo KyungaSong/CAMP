@@ -25,9 +25,9 @@ torch.cuda.manual_seed(2024)
 parser = argparse.ArgumentParser()
 parser.add_argument("--lr", type=float, default=0.001,
                     help="learning rate")
-parser.add_argument("--num_epochs", type=int, default=30,
+parser.add_argument("--num_epochs", type=int, default=200,
                     help="training epochs")
-parser.add_argument("--batch_size", type=int, default=128,
+parser.add_argument("--batch_size", type=int, default=256,
                     help="batch size for training")
 parser.add_argument("--dropout_rate", type=float, default=0.5,
                     help="dropout rate for model")
@@ -44,13 +44,13 @@ parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
 parser.add_argument("--pop_time_unit", type=int, default=30*3,
                     help="smallest time unit for item popularity statistic(default: 3 month)")
 parser.add_argument("--k_m", type=int, default=3*12*30,
-                    help="length of mid interest(default: 3 year)")
+                    help="length of mid interest(default: 3year / 6month)")
 parser.add_argument("--k_s", type=int, default=6*30,
-                    help="length of short interest(default: 6 month)")
+                    help="length of short interest(default: 6month / 1month)")
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
-parser.add_argument("--dataset", type=str, default='Toys_and_Games',
+parser.add_argument("--dataset", type=str, default='14_Toys',
                     help="dataset file name")
 parser.add_argument("--df_preprocessed", action="store_true",
                     help="flag to indicate if the dataframe has already been preprocessed")
@@ -64,6 +64,8 @@ parser.add_argument('--no_qlt', action="store_true",
                     help='flag to indicate if model has quality module')
 parser.add_argument('--inv', type=str, default='full', 
                     help='flag to indicate how model do intervention')
+
+parser.add_argument('--cuda_device', type=str, help='CUDA device to use')
 
 parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01, 
                     help='Loss weight for discrepancy between long and short term user embedding.')
@@ -146,12 +148,15 @@ def main():
     else:
         option = '_full'
 
-    if option == '_full':
-        os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-    elif option == '_inv_0' or option == '_inv_adj':
-        os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+    if args.cuda_device:
+        os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda_device
     else:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+        if option == '_full':
+            os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+        elif option in ['_inv_0', '_inv_adj']:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '1'
         
     setup_logging(config.dataset, option)
         
@@ -171,12 +176,19 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     
-    # learning_rates = [0.01, 0.001]
-    # batch_sizes = [64, 128]
-    # embedding_dims = [64, 128]
-    learning_rates = [0.01]
-    batch_sizes = [128]
-    embedding_dims = [64]
+    # Best params for full model_Sports
+    if config.dataset == "Sports_and_Outdoors":
+        learning_rates = [0.001]
+        batch_sizes = [128]
+        embedding_dims = [64]
+        # done - early stopping at epoch 11
+        # learning_rates = [0.01]
+        # batch_sizes = [128]
+        # embedding_dims = [64]
+    else:
+        learning_rates = [0.01, 0.001]
+        batch_sizes = [64, 128]
+        embedding_dims = [64, 128]
 
     best_loss = float('inf')
     best_model_params = {}
@@ -225,7 +237,7 @@ def main():
             config.embedding_dim = best_model_params['embedding_dim']
             model = CAMP(num_users, num_items, num_cats, config).to(device)
             model.load_state_dict(best_model)
-            model_save_path = f'../../model/{config.dataset}/'            
+            model_save_path = f'../../model/{config.dataset}/'     
             final_save_path = f'{model_save_path}{date_str}_best_model{option}.pt'
             if not os.path.exists(os.path.dirname(model_save_path)):
                 os.makedirs(os.path.dirname(model_save_path))
@@ -237,8 +249,9 @@ def main():
             }, final_save_path)
     else:
         date_str = input("Enter the date string of the saved model (format: yymmdd): ")
-        model_path = f'../../model/{config.dataset}/{date_str}_best_model.pt'
-        if os.path.exists(model_path+option):
+        input_option = input("Enter the option of the saved model (format: full, wo_mid, wo_both, wo_con, wo_qlt): ")
+        model_path = f'../../model/{config.dataset}/{date_str}_best_model_{input_option}.pt'
+        if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             config.embedding_dim = checkpoint['embedding_dim']
             model = CAMP(num_users, num_items, num_cats, config).to(device)
@@ -248,7 +261,7 @@ def main():
             raise FileNotFoundError(f"No model found at {model_path}")
         
         average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, device, inv = config.inv, k=config.k)
-        logging.info(f"Best Model --- Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.4f}, Rec@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, HR@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+        logging.info(f"[Test only] Best Model  --- Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.4f}, Rec@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, HR@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 
 if __name__ == "__main__":
     main()

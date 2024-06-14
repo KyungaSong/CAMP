@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 import argparse
 from tqdm import tqdm
+import itertools
 
 import torch
 import torch.nn as nn
@@ -39,7 +40,7 @@ parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
                     help="smallest time unit for model training(default: day)")
 parser.add_argument("--pop_time_unit", type=int, default=30*3,
                     help="smallest time unit for item popularity statistic")
-parser.add_argument("--dataset", type=str, default='Sports_and_Outdoors',
+parser.add_argument("--dataset", type=str, default='14_Sports',
                     help="dataset file name")
 parser.add_argument("--data_preprocessed", action="store_true",
                     help="flag to indicate if the input data has already been preprocessed")
@@ -166,7 +167,7 @@ def generate_outputs(model, data_loader, device):
     return all_outputs
 
 def main():
-    os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     setup_logging(config.dataset)
 
@@ -187,9 +188,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    lr_values = [0.0001, 0.001, 0.01]  # Learning rates to try
-    batch_size_values = [16, 32, 64]  # Batch sizes to try
-    embedding_dim_values = [64, 128, 256]  # Embedding dimensions to try
+    lr_values = [0.001, 0.01]  # Learning rates to try
+    batch_size_values = [32, 64]  # Batch sizes to try
+    embedding_dim_values = [64, 128]  # Embedding dimensions to try
 
     # # Toys_and_Games
     # lr: 0.001, batch_size: 16, embedding_dim: 64
@@ -200,39 +201,41 @@ def main():
     best_model_params = {}
     best_model = None
 
-    for lr in lr_values:
-        for batch_size in batch_size_values:
-            for embedding_dim in embedding_dim_values:
-                print(f"Training with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
-                
-                config.lr = lr
-                config.batch_size = batch_size
-                config.embedding_dim = embedding_dim
-                
-                model = PopPredict(config, num_items, num_cats, num_stores, max_time).to(device)
-                optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=0.0001)
-                scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
-                early_stopping = EarlyStopping(patience=10, verbose=True)
-                
-                for epoch in range(config.num_epochs):
-                    train_loss = train(config, model, train_loader, optimizer, device)
-                    valid_loss, valid_rmse = evaluate(config, model, valid_loader, device)
-                    scheduler.step() 
+    for lr, batch_size, embedding_dim in itertools.product(lr_values, batch_size_values, embedding_dim_values): 
+        print(f"Training with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
+        
+        config.lr = lr
+        config.batch_size = batch_size
+        config.embedding_dim = embedding_dim
+        
+        model = PopPredict(config, num_items, num_cats, num_stores, max_time).to(device)
+        optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=0.0001)
+        scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+        early_stopping = EarlyStopping(patience=10, verbose=True)
+        
+        for epoch in range(config.num_epochs):
+            train_loss = train(config, model, train_loader, optimizer, device)
+            valid_loss, valid_rmse = evaluate(config, model, valid_loader, device)
+            scheduler.step() 
 
-                    torch.cuda.empty_cache()
-                    
-                    logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Valid Loss: {valid_loss:.4f}, Valid RMSE: {valid_rmse:.4f}')
+            torch.cuda.empty_cache()
+            
+            logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Valid Loss: {valid_loss:.4f}, Valid RMSE: {valid_rmse:.4f}')
 
-                    if valid_loss < best_loss:
-                        logging.info(f'Best model is changed in epoch {epoch+1}')
-                        best_loss = valid_loss
-                        best_model_params = {'lr': config.lr, 'batch_size': config.batch_size, 'embedding_dim': config.embedding_dim, 'epoch': epoch}
-                        best_model = model.state_dict()
-                    
-                    early_stopping(valid_loss)
-                    if early_stopping.early_stop:
-                        print("Early stopping triggered.")
-                        break
+            if valid_loss < best_loss:
+                logging.info(f'Best model is changed in epoch {epoch+1}')
+                best_loss = valid_loss
+                best_model_params = {'lr': config.lr, 'batch_size': config.batch_size, 'embedding_dim': config.embedding_dim, 'epoch': epoch}
+                best_model = model.state_dict()
+            
+            early_stopping(valid_loss)
+            if early_stopping.early_stop:
+                print("Early stopping triggered.")
+                break
+
+        test_loss, test_rmse = test(config, model, test_loader, device)
+        logging.info(f'Test Loss: {test_loss:.4f}, Test RMSE: {test_rmse:.4f}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}')
+        print(f"Test Loss: {test_loss:.4f}, Test RMSE: {test_rmse:.4f}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
 
     if best_model is not None:
         print(f"Best Model Parameters: {best_model_params}")

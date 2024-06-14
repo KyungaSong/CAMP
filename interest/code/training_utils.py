@@ -135,6 +135,15 @@ def test(model, data_loader, device, inv, k=10):
             
             if inv == 'zero':
                 batch['con'].zero_()
+                batch['con_his'].zero_()
+            elif inv == 'adj':
+                # mean_con_his = batch['con_his'].mean(dim=1)
+                # mask = mean_con_his < 2.3648361388098946
+                # batch['con'][mask] = 0
+                # batch['con_his'][mask] = 0
+                batch['con'] *= 0.2
+                batch['con_his'] *= 0.2
+                
             loss, y_int = model(batch, device)
             loss = loss.mean()
             total_loss += loss.item()

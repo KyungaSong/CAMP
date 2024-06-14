@@ -4,8 +4,9 @@ import numpy as np
 import pickle
 import gc  
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset, Dataset
 from tqdm.auto import tqdm
+from sklearn.model_selection import train_test_split
 
 from multiprocessing import Pool
 from itertools import chain
@@ -18,21 +19,38 @@ def load_file(file_path):
         result = pickle.load(file)                
     return result
 
+# Change max_length!!!
 def get_history(group):
     group_array = np.array(group)
     histories = []
     for i in range(len(group_array)):
-        history = group_array[max(0, i - 128 + 1):i + 1]  
-        histories.append(np.pad(history, (128 - len(history), 0), mode='constant'))    
+        history = group_array[max(0, i - 50 + 1):i + 1]  
+        histories.append(np.pad(history, (50 - len(history), 0), mode='constant'))    
     return histories
 
-def calculate_ranges(group, k_m, k_s):
+def calculate_ranges(group, k_m, k_s, unit='ms'):
     k_m_delta = pd.Timedelta(milliseconds=k_m)
     k_s_delta = pd.Timedelta(milliseconds=k_s)
+    if not pd.api.types.is_datetime64_any_dtype(group['timestamp']):
+        group['timestamp'] = pd.to_datetime(group['timestamp'], unit=unit)
 
     group.set_index('timestamp', inplace=True)
-    group['mid_len'] = group.index.to_series().apply(lambda x: group.loc[x-k_m_delta:x].shape[0] - 1)
-    group['short_len'] = group.index.to_series().apply(lambda x: group.loc[x-k_s_delta:x].shape[0] - 1)
+    def get_mid_len(x):
+        try:
+            start_time = max(group.index.min(), x - k_m_delta)
+            return group.loc[start_time:x].shape[0] - 1
+        except KeyError:
+            return 0
+
+    def get_short_len(x):
+        try:
+            start_time = max(group.index.min(), x - k_s_delta)
+            return group.loc[start_time:x].shape[0] - 1
+        except KeyError:
+            return 0
+
+    group['mid_len'] = group.index.to_series().apply(get_mid_len)
+    group['short_len'] = group.index.to_series().apply(get_short_len)
     group.reset_index(inplace=True)
 
     return group[['mid_len', 'short_len']]
@@ -161,25 +179,52 @@ def generate_test_samples_for_user_group(user_group, all_item_ids, item_to_cat, 
                 })
     return samples
 
+
 def generate_test_samples_chunk(user_groups_chunk, all_item_ids, item_to_cat, df_pop):
     chunk_samples = []
     for user_group in tqdm(user_groups_chunk, desc="Generating test samples"):
-        samples = generate_test_samples_for_user_group([user_group], all_item_ids, item_to_cat, df_pop)
-        chunk_samples.extend(samples)
+        try:
+            samples = generate_test_samples_for_user_group([user_group], all_item_ids, item_to_cat, df_pop)
+            chunk_samples.extend(samples)
+        except Exception as e:
+            print(f"Error processing user_group: {user_group[0]}. Exception: {e}")
+    gc.collect()
     return chunk_samples
 
 def generate_test_samples_vectorized_parallel(df, all_item_ids, item_to_cat, df_pop, num_workers=16):
     user_groups = list(df.groupby('user_encoded'))
     user_groups_split = split_list(user_groups, num_workers)
-    
+
     with Pool(num_workers) as pool:
-        results = pool.starmap(generate_test_samples_chunk, [(chunk, all_item_ids, item_to_cat, df_pop) for chunk in user_groups_split])
+        results = pool.starmap(wrapper_generate_test_samples_chunk, [(chunk, all_item_ids, item_to_cat, df_pop) for chunk in user_groups_split])
     
     test_samples = list(chain.from_iterable(results))
-
     test_samples_df = pd.DataFrame(test_samples)
 
     return test_samples_df
+
+def wrapper_generate_test_samples_chunk(chunk, all_item_ids, item_to_cat, df_pop):
+    try:
+        return generate_test_samples_chunk(chunk, all_item_ids, item_to_cat, df_pop)
+    except Exception as e:
+        print(f"Error in chunk: {chunk}. Exception: {e}")
+        return []
+
+# def generate_test_samples_vectorized_parallel(df, all_item_ids, item_to_cat, df_pop, num_workers=16):
+#     user_groups = list(df.groupby('user_encoded'))
+#     user_groups_split = split_list(user_groups, num_workers)  
+
+#     test_samples = []
+#     with ProcessPoolExecutor(max_workers=num_workers) as executor:
+#         futures = {executor.submit(generate_test_samples_chunk, chunk, all_item_ids, item_to_cat, df_pop): chunk for chunk in user_groups_split}
+
+#         for future in tqdm(as_completed(futures), total=len(futures), desc="Generating test samples"):
+#             result = future.result()
+#             test_samples.extend(result)
+    
+#     test_samples_df = pd.DataFrame(test_samples)
+
+#     return test_samples_df
 
 def preprocess_df(df, df_pop, config):
     df = df.copy()
@@ -187,29 +232,60 @@ def preprocess_df(df, df_pop, config):
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
 
     max_time = df["unit_time"].max()
+    print("max_time", max_time)
     df = df.merge(df_pop, on=['item_encoded', 'unit_time'], how='left')
 
-    df['item_his_encoded'] = df.groupby('user_id')['item_encoded'].transform(get_history)
-    df['cat_his_encoded'] = df.groupby('user_id')['cat_encoded'].transform(get_history)
-    df['con_his'] = df.groupby('user_id')['conformity'].transform(get_history)
-    df['qlt_his'] = df.groupby('user_id')['quality'].transform(get_history)
+    df['item_his_encoded'] = df.groupby('user_encoded')['item_encoded'].transform(get_history)
+    df['cat_his_encoded'] = df.groupby('user_encoded')['cat_encoded'].transform(get_history)
+    df['con_his'] = df.groupby('user_encoded')['conformity'].transform(get_history)
+    df['qlt_his'] = df.groupby('user_encoded')['quality'].transform(get_history)
 
     df['item_his_encoded_set'] = df['item_his_encoded'].apply(set)
     df['label'] = 1
 
     max_item_id = df['item_encoded'].max()
     all_item_ids = set(range(1, max_item_id + 1))
+    unit = 's' if config.dataset == "MovieLens_1M" else 'ms'
 
-    ranges_df = df.groupby('user_id', group_keys=False).apply(lambda x: calculate_ranges(x, config.k_m, config.k_s), include_groups=False)
+    ranges_df = df.groupby('user_encoded', group_keys=False).apply(lambda x: calculate_ranges(x, config.k_m, config.k_s, unit = unit), include_groups=False)
     df.reset_index(drop=True, inplace=True)
     ranges_df.reset_index(drop=True, inplace=True)
     df = pd.concat([df, ranges_df], axis=1)
 
     df = df[['user_encoded', 'item_encoded', 'cat_encoded', 'conformity', 'quality', 'item_his_encoded', 'item_his_encoded_set', 'cat_his_encoded', 'con_his', 'qlt_his', 'timestamp', 'unit_time', 'mid_len', 'short_len', 'label']]
 
-    train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
-    valid_df = df[df['unit_time'] == max_time - 1].reset_index(drop=True)
-    test_df = df[df['unit_time'] == max_time].reset_index(drop=True)
+    if config.dataset == 'MovieLens_1M': # fix
+        train_df = df[df['unit_time'] < 8].reset_index(drop=True)
+        valid_df = df[df['unit_time'] == 8].reset_index(drop=True)
+        test_df = df[df['unit_time'] >= 9].reset_index(drop=True)
+    elif config.dataset == 'Sports_and_Outdoors': # fix
+        train_df = df[df['unit_time'] < max_time - 3].reset_index(drop=True)
+        valid_df = df[(df['unit_time'] < max_time - 2) & (df['unit_time'] >= max_time - 3)].reset_index(drop=True)
+        test_df = df[df['unit_time'] >= max_time -2].reset_index(drop=True)  
+    elif config.dataset == '14_Toys': # fix
+        train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
+        rest_df = df[df['unit_time'] >= max_time - 1].reset_index(drop=True)
+        valid_df = pd.DataFrame()
+        test_df = pd.DataFrame()
+        grouped = rest_df.groupby('item_encoded')
+        for _, group in grouped:
+            if len(group) == 1:
+                # 그룹의 크기가 1인 경우, 한 개의 데이터를 valid나 test에 할당
+                valid_df = pd.concat([valid_df, group])
+            else:
+                valid, test = train_test_split(group, test_size=0.5, random_state=42)
+                valid_df = pd.concat([valid_df, valid])
+                test_df = pd.concat([test_df, test])
+
+        # 인덱스를 리셋합니다
+        valid_df = valid_df.reset_index(drop=True)
+        test_df = test_df.reset_index(drop=True)
+        # valid_df = df[df['unit_time'] == max_time - 1].reset_index(drop=True)
+        # test_df = df[df['unit_time'] == max_time].reset_index(drop=True)  
+    else: # sampled_Toys fix
+        train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
+        valid_df = df[df['unit_time'] == max_time - 1].reset_index(drop=True)
+        test_df = df[df['unit_time'] == max_time].reset_index(drop=True)    
 
     total_length = len(df)
     train_ratio = len(train_df) / total_length
@@ -240,59 +316,117 @@ def preprocess_df(df, df_pop, config):
 
     return train_df, valid_df, test_df
 
-class MakeDataset(Dataset):
-    def __init__(self, users, items, cats, cons, qlts, item_histories, cat_histories, con_histories, qlt_histories, mid_lens, short_lens, labels):
-        self.users = torch.tensor(users, dtype=torch.long)
-        self.items = torch.tensor(items, dtype=torch.long)  
-        self.cats = torch.tensor(cats, dtype=torch.long)       
-        self.cons = torch.tensor(cons, dtype=torch.float)  
-        self.qlts = torch.tensor(qlts, dtype=torch.float) 
-        self.item_histories = [torch.tensor(h, dtype=torch.long) for h in item_histories]
-        self.cat_histories = [torch.tensor(c, dtype=torch.long) for c in cat_histories]
-        self.con_histories = [torch.tensor(c, dtype=torch.float) for c in con_histories]
-        self.qlt_histories = [torch.tensor(q, dtype=torch.float) for q in qlt_histories]
-        self.mid_lens = torch.tensor(mid_lens, dtype=torch.int)
-        self.short_lens = torch.tensor(short_lens, dtype=torch.int)
-        self.labels = torch.tensor(labels, dtype=torch.long)  
+# class MakeDataset(Dataset):
+#     def __init__(self, users, items, cats, cons, qlts, item_histories, cat_histories, con_histories, qlt_histories, mid_lens, short_lens, labels):
+#         self.users = torch.tensor(users, dtype=torch.long)
+#         self.items = torch.tensor(items, dtype=torch.long)  
+#         self.cats = torch.tensor(cats, dtype=torch.long)       
+#         self.cons = torch.tensor(cons, dtype=torch.float)  
+#         self.qlts = torch.tensor(qlts, dtype=torch.float) 
+#         self.item_histories = [torch.tensor(h, dtype=torch.long) for h in item_histories]
+#         self.cat_histories = [torch.tensor(c, dtype=torch.long) for c in cat_histories]
+#         self.con_histories = [torch.tensor(c, dtype=torch.float) for c in con_histories]
+#         self.qlt_histories = [torch.tensor(q, dtype=torch.float) for q in qlt_histories]
+#         self.mid_lens = torch.tensor(mid_lens, dtype=torch.int)
+#         self.short_lens = torch.tensor(short_lens, dtype=torch.int)
+#         self.labels = torch.tensor(labels, dtype=torch.long)  
+
+#     def __len__(self):
+#         return len(self.users)
+    
+#     def __getitem__(self, idx):
+#         data = {
+#             'user': self.users[idx],
+#             'item': self.items[idx],   
+#             'cat': self.cats[idx],       
+#             'con': self.cons[idx],   
+#             'qlt': self.qlts[idx],      
+#             'item_his': self.item_histories[idx],
+#             'cat_his': self.cat_histories[idx],
+#             'con_his': self.con_histories[idx],
+#             'qlt_his': self.qlt_histories[idx],
+#             'mid_len': self.mid_lens[idx],
+#             'short_len': self.short_lens[idx],
+#             'label': self.labels[idx]
+#         }
+#         return data
+
+# def create_datasets(train_df, valid_df, test_df):
+#     print("making train dataset")
+#     train_dataset = MakeDataset(
+#         train_df['user_encoded'], train_df['item_encoded'], train_df['cat_encoded'], train_df['conformity'], train_df['quality'],
+#         train_df['item_his_encoded'], train_df['cat_his_encoded'],  train_df['con_his'], train_df['qlt_his'], 
+#         train_df['mid_len'], train_df['short_len'], train_df['label']
+#     )
+#     print("making valid dataset")
+#     valid_dataset = MakeDataset(
+#         valid_df['user_encoded'], valid_df['item_encoded'], valid_df['cat_encoded'], valid_df['conformity'], valid_df['quality'],
+#         valid_df['item_his_encoded'], valid_df['cat_his_encoded'], valid_df['con_his'], valid_df['qlt_his'], 
+#         valid_df['mid_len'], valid_df['short_len'], valid_df['label']
+#     )
+#     print("making test dataset")
+#     test_dataset = MakeDataset(
+#         test_df['user_encoded'], test_df['item_encoded'], test_df['cat_encoded'], test_df['conformity'], test_df['quality'],
+#         test_df['item_his_encoded'], test_df['cat_his_encoded'], test_df['con_his'], test_df['qlt_his'], 
+#         test_df['mid_len'], test_df['short_len'], test_df['label']
+#     )   
+#     print("create datasets done!") 
+#     return train_dataset, valid_dataset, test_dataset
+
+class CustomDataset(Dataset):
+    def __init__(self, df):
+        self.df = df
 
     def __len__(self):
-        return len(self.users)
-    
+        return len(self.df)
+
     def __getitem__(self, idx):
-        data = {
-            'user': self.users[idx],
-            'item': self.items[idx],   
-            'cat': self.cats[idx],       
-            'con': self.cons[idx],   
-            'qlt': self.qlts[idx],      
-            'item_his': self.item_histories[idx],
-            'cat_his': self.cat_histories[idx],
-            'con_his': self.con_histories[idx],
-            'qlt_his': self.qlt_histories[idx],
-            'mid_len': self.mid_lens[idx],
-            'short_len': self.short_lens[idx],
-            'label': self.labels[idx]
+        row = self.df.iloc[idx]
+        return {
+            'user': torch.tensor(row['user_encoded'], dtype=torch.long),
+            'item': torch.tensor(row['item_encoded'], dtype=torch.long),
+            'cat': torch.tensor(row['cat_encoded'], dtype=torch.long),
+            'con': torch.tensor(row['conformity'], dtype=torch.float),
+            'qlt': torch.tensor(row['quality'], dtype=torch.float),
+            'item_his': torch.tensor(row['item_his_encoded'], dtype=torch.long),
+            'cat_his': torch.tensor(row['cat_his_encoded'], dtype=torch.long),
+            'con_his': torch.tensor(row['con_his'], dtype=torch.float),
+            'qlt_his': torch.tensor(row['qlt_his'], dtype=torch.float),
+            'mid_len': torch.tensor(row['mid_len'], dtype=torch.int),
+            'short_len': torch.tensor(row['short_len'], dtype=torch.int),
+            'label': torch.tensor(row['label'], dtype=torch.long)
         }
-        return data
+
+class CustomIterableDataset(IterableDataset):
+    def __init__(self, df):
+        self.df = df
+
+    def preprocess_row(self, row):
+        return {
+            'user': torch.tensor(row['user_encoded'], dtype=torch.long),
+            'item': torch.tensor(row['item_encoded'], dtype=torch.long),
+            'cat': torch.tensor(row['cat_encoded'], dtype=torch.long),
+            'con': torch.tensor(row['conformity'], dtype=torch.float),
+            'qlt': torch.tensor(row['quality'], dtype=torch.float),
+            'item_his': torch.tensor(row['item_his_encoded'], dtype=torch.long),
+            'cat_his': torch.tensor(row['cat_his_encoded'], dtype=torch.long),
+            'con_his': torch.tensor(row['con_his'], dtype=torch.float),
+            'qlt_his': torch.tensor(row['qlt_his'], dtype=torch.float),
+            'mid_len': torch.tensor(row['mid_len'], dtype=torch.int),
+            'short_len': torch.tensor(row['short_len'], dtype=torch.int),
+            'label': torch.tensor(row['label'], dtype=torch.long)
+        }
+
+    def __iter__(self):
+        for _, row in self.df.iterrows():
+            yield self.preprocess_row(row)
+
+    def __len__(self):
+        return len(self.df)
 
 def create_datasets(train_df, valid_df, test_df):
-    print("making train dataset")
-    train_dataset = MakeDataset(
-        train_df['user_encoded'], train_df['item_encoded'], train_df['cat_encoded'], train_df['conformity'], train_df['quality'],
-        train_df['item_his_encoded'], train_df['cat_his_encoded'],  train_df['con_his'], train_df['qlt_his'], 
-        train_df['mid_len'], train_df['short_len'], train_df['label']
-    )
-    print("making valid dataset")
-    valid_dataset = MakeDataset(
-        valid_df['user_encoded'], valid_df['item_encoded'], valid_df['cat_encoded'], valid_df['conformity'], valid_df['quality'],
-        valid_df['item_his_encoded'], valid_df['cat_his_encoded'], valid_df['con_his'], valid_df['qlt_his'], 
-        valid_df['mid_len'], valid_df['short_len'], valid_df['label']
-    )
-    print("making test dataset")
-    test_dataset = MakeDataset(
-        test_df['user_encoded'], test_df['item_encoded'], test_df['cat_encoded'], test_df['conformity'], test_df['quality'],
-        test_df['item_his_encoded'], test_df['cat_his_encoded'], test_df['con_his'], test_df['qlt_his'], 
-        test_df['mid_len'], test_df['short_len'], test_df['label']
-    )   
-    print("create datasets done!") 
+    train_dataset = CustomDataset(train_df)
+    valid_dataset = CustomIterableDataset(valid_df)
+    test_dataset = CustomIterableDataset(test_df)
+
     return train_dataset, valid_dataset, test_dataset
