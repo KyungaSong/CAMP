@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime
 import pandas as pd
+import numpy as np
 import argparse
 import itertools
 
@@ -41,29 +42,27 @@ parser.add_argument("--output_dim", type=int, default=1,
 
 parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
                     help="smallest time unit for model training(default: day)")
-parser.add_argument("--pop_time_unit", type=int, default=30*3,
-                    help="smallest time unit for item popularity statistic(default: 3 month)")
-parser.add_argument("--k_m", type=int, default=3*12*30,
-                    help="length of mid interest(default: 3year / 6month)")
-parser.add_argument("--k_s", type=int, default=6*30,
-                    help="length of short interest(default: 6month / 1month)")
+parser.add_argument("--k_m", type=int, default=6,
+                    help="length of mid interest(unit: month)")
+parser.add_argument("--k_s", type=int, default=1,
+                    help="length of short interest(unit: month)")
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
 parser.add_argument("--dataset", type=str, default='14_Toys',
                     help="dataset file name")
+parser.add_argument("--data_type", type=str, default='skew',
+                    help="dataset split type")
 parser.add_argument("--df_preprocessed", action="store_true",
                     help="flag to indicate if the dataframe has already been preprocessed")
 parser.add_argument("--test_only", action="store_true",
                     help="flag to indicate if only testing should be performed")
-parser.add_argument('--no_mid', action="store_true", 
+parser.add_argument('--wo_mid', action="store_true", 
                     help='flag to indicate if model has mid-term module')
-parser.add_argument('--no_con', action="store_true", 
+parser.add_argument('--wo_con', action="store_true", 
                     help='flag to indicate if model has conformity module')
-parser.add_argument('--no_qlt', action="store_true", 
+parser.add_argument('--wo_qlt', action="store_true", 
                     help='flag to indicate if model has quality module')
-parser.add_argument('--inv', type=str, default='full', 
-                    help='flag to indicate how model do intervention')
 
 parser.add_argument('--cuda_device', type=str, help='CUDA device to use')
 
@@ -76,7 +75,7 @@ parser.add_argument('--regularization_weight', type=float, default=0.0001,
 args = parser.parse_args()
 config = Config(args=args)
 
-def setup_logging(dataset_name, option):
+def setup_logging(dataset_name, data_type, option):
     log_dir = os.path.abspath('../../log')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -86,7 +85,7 @@ def setup_logging(dataset_name, option):
         os.makedirs(dataset_log_dir)
 
     current_date = datetime.now().strftime('%Y-%m-%d')
-    log_file = os.path.join(dataset_log_dir, f'{current_date}{option}.txt')
+    log_file = os.path.join(dataset_log_dir, f'{current_date}_{data_type}{option}.txt')
     logging.basicConfig(filename=log_file, level=logging.DEBUG,
                         format='%(asctime)s:%(levelname)s:%(message)s',
                         datefmt='%Y-%m-%d')
@@ -97,10 +96,10 @@ def load_df(dataset_name):
     pop_file_path = f'{dataset_path}pop_{dataset_name}.pkl'
     processed_path = f'{dataset_path}preprocessed/'
 
-    if os.path.exists(f'{processed_path}/train_df.pkl') and os.path.exists(f'{processed_path}/valid_df.pkl') and os.path.exists(f'{processed_path}/test_df.pkl') and config.df_preprocessed:
-        train_df = load_file(f'{processed_path}/train_df.pkl')
-        valid_df = load_file(f'{processed_path}/valid_df.pkl')
-        test_df = load_file(f'{processed_path}/test_df.pkl')
+    if os.path.exists(f'{processed_path}/train_df_{config.data_type}.pkl') and os.path.exists(f'{processed_path}/valid_df_{config.data_type}.pkl') and os.path.exists(f'{processed_path}/test_df_{config.data_type}.pkl') and config.df_preprocessed:
+        train_df = load_file(f'{processed_path}/train_df_{config.data_type}.pkl')
+        valid_df = load_file(f'{processed_path}/valid_df_{config.data_type}.pkl')
+        test_df = load_file(f'{processed_path}/test_df_{config.data_type}.pkl')
         
         combined_df = pd.concat([train_df, valid_df, test_df])
         num_users = combined_df['user_encoded'].max() + 1
@@ -123,9 +122,9 @@ def load_df(dataset_name):
             if not os.path.exists(processed_path):
                 os.makedirs(processed_path)
             date_str = datetime.now().strftime('%Y%m%d')
-            train_df.to_pickle(f'{processed_path}/train_df_{date_str}.pkl')
-            valid_df.to_pickle(f'{processed_path}/valid_df_{date_str}.pkl')
-            test_df.to_pickle(f'{processed_path}/test_df_{date_str}.pkl')
+            train_df.to_pickle(f'{processed_path}/train_df_{config.data_type}_{date_str}.pkl')
+            valid_df.to_pickle(f'{processed_path}/valid_df_{config.data_type}_{date_str}.pkl')
+            test_df.to_pickle(f'{processed_path}/test_df_{config.data_type}_{date_str}.pkl')
         except Exception as e:
             logging.error(f"Error during data preparation: {str(e)}")
             raise
@@ -133,32 +132,29 @@ def load_df(dataset_name):
     return train_df, valid_df, test_df, num_users, num_items, num_cats
 
 def main():
-    if config.no_mid:
-        option = '_wo_mid'
-    elif config.inv == 'zero':
-        option = '_inv_0'
-    elif config.inv == 'adj':
-        option = '_inv_adj'
-    elif config.no_con and config.no_qlt:
-        option = '_wo_both'
-    elif config.no_con:
-        option = '_wo_con'        
-    elif config.no_qlt:
-        option = '_wo_qlt'
+    option = ''
+    if config.wo_mid:
+        option += '_wo_mid'    
+    elif config.wo_con and config.wo_qlt:
+        option += '_wo_both'
+    elif config.wo_con:
+        option += '_wo_con'        
+    elif config.wo_qlt:
+        option += '_wo_qlt'
     else:
-        option = '_full'
+        option += '_full'
 
     if args.cuda_device:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda_device
     else:
         if option == '_full':
             os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-        elif option in ['_inv_0', '_inv_adj']:
+        elif option in ['_wo_con', 'wo_qlt']:
             os.environ['CUDA_VISIBLE_DEVICES'] = '2'
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = '1'
         
-    setup_logging(config.dataset, option)
+    setup_logging(config.dataset, config.data_type, option)
         
     print(f"Data preprocessing for dataset {config.dataset}......")
     train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config.dataset)
@@ -170,23 +166,29 @@ def main():
     torch.cuda.empty_cache()
 
     print("Making Data loader......")
+    g = torch.Generator()
+    g.manual_seed(2024)
+
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
     valid_loader = DataLoader(valid_dataset, batch_size=config.batch_size)
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     
-    # Best params for full model_Sports
-    if config.dataset == "Sports_and_Outdoors":
+    if config.data_type == "skew":  
+        learning_rates = [0.001]
+        batch_sizes = [128]
+        embedding_dims = [128]
+    elif config.data_type == "reg":      
+        learning_rates = [0.001]
+        batch_sizes = [64]
+        embedding_dims = [64]
+    elif config.data_type == "seq":      
         learning_rates = [0.001]
         batch_sizes = [128]
         embedding_dims = [64]
-        # done - early stopping at epoch 11
-        # learning_rates = [0.01]
-        # batch_sizes = [128]
-        # embedding_dims = [64]
     else:
-        learning_rates = [0.01, 0.001]
+        learning_rates = [0.001, 0.0001]
         batch_sizes = [64, 128]
         embedding_dims = [64, 128]
 
@@ -196,8 +198,8 @@ def main():
 
     if not config.test_only:
         for lr, batch_size, embedding_dim in itertools.product(learning_rates, batch_sizes, embedding_dims):            
-            print(f"{config.dataset}{option}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
-            logging.info(f"{config.dataset}{option}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
+            print(f"{config.dataset}_{config.data_type}{option}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
+            logging.info(f"{config.dataset}_{config.data_type}{option}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
             
             config.lr = lr
             config.batch_size = batch_size
@@ -224,8 +226,22 @@ def main():
                     print("Early stopping triggered")
                     break
             
-            average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, device, inv = config.inv, k=config.k)
-            logging.info(f"Testing after {config.dataset}{option}_with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim} --- Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.4f}, Rec@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, HR@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+
+            # if config.dataset == "14_Sports":
+            #     if config.data_type == "skew":
+            #         inv = 0.5
+            #     elif config.data_type == "reg":
+            #         inv = 0.5
+            # elif config.dataset == "14_Toys":
+            #     if config.data_type == "skew":
+            #         inv = 0.4
+            #     elif config.data_type == "reg":
+            #         inv = 0.2
+
+            for inv in np.linspace(0, 1, 11):
+                average_loss, results = test(model, test_loader, device, inv, k_list=[20])
+                for k, metrics in results.items():
+                    logging.info(f"{inv} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             
             # Clear memory and cache after each run
             del model, optimizer, scheduler, early_stopping
@@ -233,12 +249,13 @@ def main():
 
         if best_model is not None:
             print(f"Best Model Parameters: {best_model_params}")
+            logging.info(f"Best Model Parameters: {best_model_params}")
             date_str = datetime.now().strftime('%y%m%d')
             config.embedding_dim = best_model_params['embedding_dim']
             model = CAMP(num_users, num_items, num_cats, config).to(device)
             model.load_state_dict(best_model)
             model_save_path = f'../../model/{config.dataset}/'     
-            final_save_path = f'{model_save_path}{date_str}_best_model{option}.pt'
+            final_save_path = f'{model_save_path}{date_str}_best_model_{config.data_type}{option}.pt'
             if not os.path.exists(os.path.dirname(model_save_path)):
                 os.makedirs(os.path.dirname(model_save_path))
             torch.save({
@@ -249,8 +266,12 @@ def main():
             }, final_save_path)
     else:
         date_str = input("Enter the date string of the saved model (format: yymmdd): ")
+        input_data_type = input("Enter the data type of the saved model (format: reg, skew): ")
         input_option = input("Enter the option of the saved model (format: full, wo_mid, wo_both, wo_con, wo_qlt): ")
-        model_path = f'../../model/{config.dataset}/{date_str}_best_model_{input_option}.pt'
+        # date_str = '240618'
+        # input_data_type = 'skew'
+        # input_option = 'full'
+        model_path = f'../../model/{config.dataset}/{date_str}_best_model_{input_data_type}_{input_option}.pt'
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             config.embedding_dim = checkpoint['embedding_dim']
@@ -260,8 +281,10 @@ def main():
         else:
             raise FileNotFoundError(f"No model found at {model_path}")
         
-        average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr = test(model, test_loader, device, inv = config.inv, k=config.k)
-        logging.info(f"[Test only] Best Model  --- Test Loss: {average_loss:.4f}, Pre@{config.k}: {avg_precision:.4f}, Rec@{config.k}: {avg_recall:.4f}, NDCG@{config.k}: {avg_ndcg:.4f}, HR@{config.k}: {avg_hit_rate:.4f}, AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+        for inv in np.linspace(0, 1, 11):
+            average_loss, results = test(model, test_loader, device, inv, k_list=[5, 10, 20])
+            for k, metrics in results.items():
+                logging.info(f"{inv} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
 
 if __name__ == "__main__":
     main()

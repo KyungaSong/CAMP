@@ -2,8 +2,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.optim as optim
-
-from evaluate import precision_at_k, recall_at_k, ndcg_at_k, hit_rate_at_k
+from collections import defaultdict
 from sklearn.metrics import roc_auc_score
 
 def train(model, data_loader, optimizer, device):
@@ -114,15 +113,10 @@ def evaluate(model, data_loader, device):
 #     print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
 #     return average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr
 
-def test(model, data_loader, device, inv, k=10):
+def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
     model.eval()  
     total_loss = 0
-    precision_scores = []
-    recall_scores = []
-    ndcg_scores = []
-    hit_rates = []
-    auc_scores = []
-    mrr_scores = []
+    metrics = {k: {'precision_scores': [], 'recall_scores': [], 'ndcg_scores': [], 'hit_rates': [], 'auc_scores': [], 'mrr_scores': []} for k in k_list}
 
     all_predictions = []
     all_labels = []
@@ -132,17 +126,10 @@ def test(model, data_loader, device, inv, k=10):
     with torch.no_grad():
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
-            
-            if inv == 'zero':
-                batch['con'].zero_()
-                batch['con_his'].zero_()
-            elif inv == 'adj':
-                # mean_con_his = batch['con_his'].mean(dim=1)
-                # mask = mean_con_his < 2.3648361388098946
-                # batch['con'][mask] = 0
-                # batch['con_his'][mask] = 0
-                batch['con'] *= 0.2
-                batch['con_his'] *= 0.2
+
+            if not (inv == 1):
+                # batch['con'] *= inv
+                batch['con_his'] *= inv
                 
             loss, y_int = model(batch, device)
             loss = loss.mean()
@@ -158,7 +145,7 @@ def test(model, data_loader, device, inv, k=10):
             all_item_ids.extend(batch['item'].cpu().numpy())
 
     # Group predictions, labels, and items by user
-    from collections import defaultdict
+    
     predictions_by_user = defaultdict(list)
     labels_by_user = defaultdict(list)
     items_by_user = defaultdict(list)
@@ -176,48 +163,61 @@ def test(model, data_loader, device, inv, k=10):
 
         # Sort by prediction score
         sorted_indices = np.argsort(user_predictions)[::-1]
-        top_k_items = [user_items[i] for i in sorted_indices[:k]]
-        actual_items = [user_items[i] for i in range(len(user_labels)) if user_labels[i] == 1]
 
-        hits = [item in actual_items for item in top_k_items]
+        for k in k_list:
+            top_k_items = [user_items[i] for i in sorted_indices[:k]]
+            actual_items = [user_items[i] for i in range(len(user_labels)) if user_labels[i] == 1]
 
-        precision = sum(hits) / k
-        recall = sum(hits) / len(actual_items) if actual_items else 0
-        hit_rate = 1 if sum(hits) > 0 else 0
+            hits = [item in actual_items for item in top_k_items]
 
-        # NDCG@k
-        dcg = sum(hit / np.log2(idx + 2) for idx, hit in enumerate(hits))
-        idcg = sum(1.0 / np.log2(idx + 2) for idx in range(min(len(actual_items), k)))
-        ndcg = dcg / idcg if idcg > 0 else 0
+            precision = sum(hits) / k
+            recall = sum(hits) / len(actual_items) if actual_items else 0
+            hit_rate = 1 if sum(hits) > 0 else 0
 
-        # AUC
-        y_true = user_labels
-        y_scores = user_predictions
-        auc_score = roc_auc_score(y_true, y_scores) if len(set(y_true)) > 1 else 0
+            # NDCG@k
+            dcg = sum(hit / np.log2(idx + 2) for idx, hit in enumerate(hits))
+            idcg = sum(1.0 / np.log2(idx + 2) for idx in range(min(len(actual_items), k)))
+            ndcg = dcg / idcg if idcg > 0 else 0
 
-        # MRR
-        ranks = [idx + 1 for idx, hit in enumerate(hits) if hit]
-        mrr = (1.0 / ranks[0]) if ranks else 0
+            # AUC
+            y_true = user_labels
+            y_scores = user_predictions
+            auc_score = roc_auc_score(y_true, y_scores) if len(set(y_true)) > 1 else 0
 
-        precision_scores.append(precision)
-        recall_scores.append(recall)
-        ndcg_scores.append(ndcg)
-        hit_rates.append(hit_rate)
-        auc_scores.append(auc_score)
-        mrr_scores.append(mrr)
+            # MRR
+            ranks = [idx + 1 for idx, hit in enumerate(hits) if hit]
+            mrr = (1.0 / ranks[0]) if ranks else 0
+
+            metrics[k]['precision_scores'].append(precision)
+            metrics[k]['recall_scores'].append(recall)
+            metrics[k]['ndcg_scores'].append(ndcg)
+            metrics[k]['hit_rates'].append(hit_rate)
+            metrics[k]['auc_scores'].append(auc_score)
+            metrics[k]['mrr_scores'].append(mrr)
 
     average_loss = total_loss / len(data_loader)
-    avg_precision = np.mean(precision_scores)
-    avg_recall = np.mean(recall_scores)
-    avg_ndcg = np.mean(ndcg_scores)
-    avg_hit_rate = np.mean(hit_rates)
-    avg_auc = np.mean(auc_scores)
-    avg_mrr = np.mean(mrr_scores)
+    results = {}
+    for k in k_list:
+        avg_precision = np.mean(metrics[k]['precision_scores'])
+        avg_recall = np.mean(metrics[k]['recall_scores'])
+        avg_ndcg = np.mean(metrics[k]['ndcg_scores'])
+        avg_hit_rate = np.mean(metrics[k]['hit_rates'])
+        avg_auc = np.mean(metrics[k]['auc_scores'])
+        avg_mrr = np.mean(metrics[k]['mrr_scores'])
 
-    print(f"Test Loss: {average_loss:.4f}")
-    print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
-    print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
-    return average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr
+        results[k] = {
+            'Precision': avg_precision,
+            'Recall': avg_recall,
+            'NDCG': avg_ndcg,
+            'Hit Rate': avg_hit_rate,
+            'AUC': avg_auc,
+            'MRR': avg_mrr
+        }
+        print(f"Metrics for k={k}:")
+        print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
+        print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+    
+    return average_loss, results
 
 class EarlyStopping:
     def __init__(self, patience=7, verbose=False, delta=0):

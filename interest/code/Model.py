@@ -190,7 +190,7 @@ def bpr_loss(a, positive, negative):
     neg_score = torch.sum(a * negative, dim=1)
     return F.softplus(neg_score - pos_score)
 
-def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, no_mid):
+def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, wo_mid):
     """
     Calculate the overall contrastive loss L_con for a user at time t,
     which is the sum of L_lm (long-mid term contrastive loss) and L_ms (mid-short term contrastive loss).
@@ -199,7 +199,7 @@ def calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, no_mid):
     L_lm = bpr_loss(z_l, p_l, p_m) + bpr_loss(p_l, z_l, z_m) + \
            bpr_loss(z_m, p_m, p_l) + bpr_loss(p_m, z_m, z_l)
 
-    if not no_mid:
+    if not wo_mid:
     # Loss for the mid-term and short-term interests pair
         L_ms = bpr_loss(z_m, p_m, p_s) + bpr_loss(p_m, z_m, z_s) + \
             bpr_loss(z_s, p_s, p_m) + bpr_loss(p_s, z_s, z_m)
@@ -217,12 +217,12 @@ def compute_discrepancy_loss(a, b, discrepancy_loss_weight):
     return discrepancy_loss
 
 class InterestFusionModule(nn.Module):
-    def __init__(self, combined_dim, hidden_dim, output_dim, dropout_rate, no_con, no_qlt):
+    def __init__(self, combined_dim, hidden_dim, output_dim, dropout_rate, wo_con, wo_qlt):
         super(InterestFusionModule, self).__init__()
         self.combined_dim = combined_dim
         self.hidden_dim = hidden_dim
-        self.no_con = no_con
-        self.no_qlt = no_qlt
+        self.wo_con = wo_con
+        self.wo_qlt = wo_qlt
         self.gru_l = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
         self.gru_m = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
         
@@ -254,13 +254,13 @@ class InterestFusionModule(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, combined_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds, no_mid):
+    def forward(self, combined_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds, wo_mid):
         # Long-term history feature extraction
         h_l, _ = self.gru_l(combined_his_embeds)
         h_l = h_l[:, -1, :]
 
         # Mid-term history feature extraction
-        if not no_mid:
+        if not wo_mid:
             batch_size, seq_len, _ = combined_his_embeds.size()
             masks = torch.arange(seq_len, device=mid_lens.device).expand(batch_size, seq_len) >= (seq_len - mid_lens.unsqueeze(1))
             masked_embeddings = combined_his_embeds * masks.unsqueeze(-1).float()
@@ -270,18 +270,18 @@ class InterestFusionModule(nn.Module):
 
         # Attention weights
         alpha_l = self.mlp_alpha_l(torch.cat((h_l, z_l, z_m), dim=1))
-        if not no_mid:
+        if not wo_mid:
             alpha_m = self.mlp_alpha_m(torch.cat((h_m, z_m, z_s), dim=1))
             z_t = alpha_l * z_l + (1 - alpha_l) * alpha_m * z_m + (1 - alpha_l) * (1 - alpha_m) * z_s
         else:
             z_t = alpha_l * z_l + (1 - alpha_l) * z_m
 
         # Concatenate the embeddings for prediction
-        if self.no_con and self.no_qlt:
+        if self.wo_con and self.wo_qlt:
             combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds), dim=1)
-        elif self.no_con:
+        elif self.wo_con:
             combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds, qlt_embeds), dim=1)
-        elif self.no_qlt:
+        elif self.wo_qlt:
             combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds, con_embeds), dim=1)
         else:            
             combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds, con_embeds, qlt_embeds), dim=1)
@@ -305,20 +305,20 @@ class CAMP(nn.Module):
         self.cat_embedding = nn.Embedding(num_cats, config.embedding_dim, padding_idx=0)
         self.con_transform = nn.Linear(1, config.embedding_dim)
         self.qlt_transform = nn.Linear(1, config.embedding_dim)
-        if config.no_con and config.no_qlt:
+        if config.wo_con and config.wo_qlt:
             self.combined_dim = 2 * config.embedding_dim
-        elif config.no_con or config.no_qlt:
+        elif config.wo_con or config.wo_qlt:
             self.combined_dim = 3 * config.embedding_dim
         else:
             self.combined_dim = 4 * config.embedding_dim
         self.long_term_module = LongTermInterestModule(self.combined_dim, config.embedding_dim, config.dropout_rate)
         self.mid_term_module = MidTermInterestModule(self.combined_dim, config.embedding_dim, config.hidden_dim, config.dropout_rate)
         self.short_term_module = ShortTermInterestModule(self.combined_dim, config.embedding_dim, config.hidden_dim, config.dropout_rate)
-        self.interest_fusion_module = InterestFusionModule(self.combined_dim, config.hidden_dim, config.output_dim, config.dropout_rate, config.no_con, config.no_qlt)
+        self.interest_fusion_module = InterestFusionModule(self.combined_dim, config.hidden_dim, config.output_dim, config.dropout_rate, config.wo_con, config.wo_qlt)
         self.bce_loss_module = BCELossModule(pos_weight=torch.tensor([4.0]))
         self.regularization_weight = config.regularization_weight
         self.discrepancy_loss_weight = config.discrepancy_loss_weight
-        self.no_mid = config.no_mid
+        self.wo_mid = config.wo_mid
 
     def forward(self, batch, device):
         user_ids = batch['user']
@@ -330,7 +330,7 @@ class CAMP(nn.Module):
         cats_history_padded = batch['cat_his']
         con_his = batch['con_his']
         qlt_his = batch['qlt_his']
-        if not self.no_mid:
+        if not self.wo_mid:
             mid_lens = batch['mid_len']
         else:
             mid_lens = batch['short_len']
@@ -348,11 +348,11 @@ class CAMP(nn.Module):
         con_his_embeds = self.con_transform(con_his.unsqueeze(-1))
         qlt_his_embeds = self.qlt_transform(qlt_his.unsqueeze(-1))         
 
-        if self.config.no_con and self.config.no_qlt:
+        if self.config.wo_con and self.config.wo_qlt:
             combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
-        elif self.config.no_con:
+        elif self.config.wo_con:
             combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, qlt_his_embeds), dim=-1)
-        elif self.config.no_qlt:
+        elif self.config.wo_qlt:
             combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds), dim=-1)
         else:            
             combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds, qlt_his_embeds), dim=-1)
@@ -364,14 +364,14 @@ class CAMP(nn.Module):
         p_l = long_term_interest_proxy(combined_his_embeds)
         p_m = mid_term_interest_proxy(combined_his_embeds, mid_lens)
         p_s = short_term_interest_proxy(combined_his_embeds, short_lens)
-        loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, self.no_mid)
+        loss_con = calculate_contrastive_loss(z_l, z_m, z_s, p_l, p_m, p_s, self.wo_mid)
 
-        y_int = self.interest_fusion_module(combined_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds, self.no_mid)
+        y_int = self.interest_fusion_module(combined_his_embeds, mid_lens, z_l, z_m, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds, self.wo_mid)
         labels = labels.view(-1, 1)
         loss_bce = self.bce_loss_module(y_int, labels)
 
         loss_discrepancy = compute_discrepancy_loss(z_l, z_m, self.discrepancy_loss_weight)
-        if not self.no_mid:
+        if not self.wo_mid:
             loss_discrepancy_ms = compute_discrepancy_loss(z_m, z_s, self.discrepancy_loss_weight)
             loss_discrepancy += loss_discrepancy_ms
 
