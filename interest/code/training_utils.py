@@ -127,9 +127,7 @@ def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
 
-            if not (inv == 1):
-                # batch['con'] *= inv
-                batch['con_his'] *= inv
+            batch['con_his'] *= inv
                 
             loss, y_int = model(batch, device)
             loss = loss.mean()

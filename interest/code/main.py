@@ -15,7 +15,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 
 from config import Config
-from preprocess import load_file, preprocess_df, create_datasets
+from preprocess import load_file, preprocess_df, create_dataloader
 from Model import CAMP
 from training_utils import train, evaluate, test, EarlyStopping
 
@@ -160,18 +160,10 @@ def main():
     train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config.dataset)
 
     print("Create datasets......")
-    train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
+    train_loader, valid_loader, test_loader = create_dataloader(train_df, valid_df, test_df)
 
     del train_df, valid_df, test_df
     torch.cuda.empty_cache()
-
-    print("Making Data loader......")
-    g = torch.Generator()
-    g.manual_seed(2024)
-
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=config.batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=config.batch_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     
@@ -241,7 +233,7 @@ def main():
             for inv in np.linspace(0, 1, 11):
                 average_loss, results = test(model, test_loader, device, inv, k_list=[20])
                 for k, metrics in results.items():
-                    logging.info(f"{inv} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+                    logging.info(f"{inv:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             
             # Clear memory and cache after each run
             del model, optimizer, scheduler, early_stopping
