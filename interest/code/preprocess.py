@@ -97,15 +97,32 @@ def generate_negative_samples_chunk(df_chunk, pop_dict, all_item_ids, num_sample
             all_item_ids, df_chunk.iloc[idx]['item_encoded'], df_chunk.iloc[idx]['item_his_encoded_set'], num_samples, item_to_cat, pop_dict, df_chunk.iloc[idx]['unit_time']
         )
         chunk_neg_samples.extend(neg_samples)
+        if idx % 100 == 0:
+            gc.collect() 
+    gc.collect()  
     return chunk_neg_samples
 
 def generate_negative_samples_vectorized_parallel(df, pop_dict, all_item_ids, num_samples, item_to_cat, num_workers=8):
-    df_split = np.array_split(df, num_workers * 2)
+    df_split = np.array_split(df, num_workers)
+
+    print("Starting parallel processing with {} workers".format(num_workers))
     
     with Pool(num_workers) as pool:
-        results = pool.starmap(generate_negative_samples_chunk, [(chunk, pop_dict, all_item_ids, num_samples, item_to_cat) for chunk in df_split])
+        results = []
+        for chunk in df_split:
+            result = pool.apply_async(generate_negative_samples_chunk, (chunk, pop_dict, all_item_ids, num_samples, item_to_cat))
+            results.append(result)
+        
+        neg_samples = []
+        for result in results:
+            try:
+                chunk_neg_samples = result.get(timeout=300)  # 5 minutes timeout for each chunk
+                neg_samples.extend(chunk_neg_samples)
+            except TimeoutError:
+                print("A chunk took too long to process and was terminated.")
+                continue
     
-    neg_samples = list(chain.from_iterable(results))
+    print("Parallel processing completed")
 
     neg_samples_df = pd.DataFrame(neg_samples)
 
@@ -129,9 +146,10 @@ def generate_negative_samples_vectorized_parallel(df, pop_dict, all_item_ids, nu
 
     neg_samples_df = neg_samples_df[neg_samples_df['item_encoded'] != 0]
 
+    print("Negative samples generated successfully")
+
     return neg_samples_df
 
-    
 def create_pop_dict(df_pop):
     pop_dict = {}
     for index, row in df_pop.iterrows():
@@ -144,7 +162,8 @@ def preprocess_df(df, df_pop, config):
     df = df.sort_values(by=['user_encoded', 'timestamp'])
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
     pop_dict = create_pop_dict(df_pop)
-
+    
+    num_users = df['user_encoded'].max() + 1
     max_time = df["unit_time"].max()
     print("max_time", max_time)
     df = df.merge(df_pop, on=['item_encoded', 'unit_time'], how='left')
@@ -167,33 +186,6 @@ def preprocess_df(df, df_pop, config):
 
     df = df[['user_encoded', 'item_encoded', 'cat_encoded', 'conformity', 'quality', 'item_his_encoded', 'item_his_encoded_set', 'cat_his_encoded', 'con_his', 'qlt_his', 'timestamp', 'unit_time', 'mid_len', 'short_len', 'label']]
 
-    # if config.dataset == 'MovieLens_1M': # fix
-    #     train_df = df[df['unit_time'] < 8].reset_index(drop=True)
-    #     valid_df = df[df['unit_time'] == 8].reset_index(drop=True)
-    #     test_df = df[df['unit_time'] >= 9].reset_index(drop=True)
-    # elif config.dataset == 'Sports_and_Outdoors': # fix
-    #     train_df = df[df['unit_time'] < max_time - 3].reset_index(drop=True)
-    #     valid_df = df[(df['unit_time'] < max_time - 2) & (df['unit_time'] >= max_time - 3)].reset_index(drop=True)
-    #     test_df = df[df['unit_time'] >= max_time -2].reset_index(drop=True)  
-    # elif config.dataset == '14_Toys': # fix
-    #     train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
-    #     rest_df = df[df['unit_time'] >= max_time - 1].reset_index(drop=True)
-    #     valid_df = pd.DataFrame()
-    #     test_df = pd.DataFrame()
-    #     grouped = rest_df.groupby('item_encoded')
-    #     for _, group in grouped:
-    #         if len(group) == 1:
-    #             valid_df = pd.concat([valid_df, group])
-    #         else:
-    #             valid, test = train_test_split(group, test_size=0.5, random_state=42)
-    #             valid_df = pd.concat([valid_df, valid])
-    #             test_df = pd.concat([test_df, test])
-    #     valid_df = valid_df.reset_index(drop=True)
-    #     test_df = test_df.reset_index(drop=True)
-    # else: # sampled_Toys fix
-    #     train_df = df[df['unit_time'] <= max_time - 2].reset_index(drop=True)
-    #     valid_df = df[df['unit_time'] == max_time - 1].reset_index(drop=True)
-    #     test_df = df[df['unit_time'] == max_time].reset_index(drop=True)
     if config.data_type == 'reg':
         temp_df, test_df = train_test_split(df, test_size=0.14, random_state=42)
         train_df, valid_df = train_test_split(temp_df, test_size=0.1, random_state=42)
@@ -201,28 +193,14 @@ def preprocess_df(df, df_pop, config):
         test_size = int(len(df) * 0.2)
         max_sample_size = test_size // df['item_encoded'].nunique()
         test_df = df.groupby('item_encoded').apply(lambda x: x.sample(n=min(len(x), max_sample_size), random_state=42)).reset_index(drop=True)
-        # if len(test_df) < test_size:
-        #     remaining_samples = test_size - len(test_df)
-        #     additional_samples = df.drop(test_df.index).sample(n=remaining_samples, random_state=42)
-        #     test_df = pd.concat([test_df, additional_samples]).reset_index(drop=True)
         temp_df = df.drop(test_df.index)
         train_df, valid_df = train_test_split(temp_df, test_size=0.1, random_state=42)
     elif config.data_type == "seq":
-        df = df.sort_values(by=['user_encoded', 'timestamp'])        
-        train_list = []
-        valid_list = []
-        test_list = []
-        for user, user_df in df.groupby('user_encoded'):
-            if len(user_df) >= 2:
-                test_list.append(user_df.iloc[-1:])
-                valid_list.append(user_df.iloc[-2:-1])
-                train_list.append(user_df.iloc[:-2])
-            elif len(user_df) == 1:
-                test_list.append(user_df)
-            
-        train_df = pd.concat(train_list)
-        valid_df = pd.concat(valid_list)
-        test_df = pd.concat(test_list)
+        train_df = df[df['unit_time'] < max_time - 1]
+        rest_data = df[df['unit_time'] >= max_time - 1].reset_index(drop=True)
+        val_user_set = np.random.choice(np.arange(num_users), int(num_users / 2), replace=False)
+        valid_df = rest_data[rest_data['user_encoded'].isin(val_user_set)].reset_index(drop=True)
+        test_df = rest_data[~rest_data['user_encoded'].isin(val_user_set)].reset_index(drop=True)
     else:
         raise ValueError("Invalid data_type. Please enter 'reg', 'skew', or 'seq'.")
 
@@ -241,8 +219,8 @@ def preprocess_df(df, df_pop, config):
     print("Generating negative samples for valid dataset")
     valid_neg_df = generate_negative_samples_vectorized_parallel(valid_df, pop_dict, all_item_ids, config.valid_num_samples, item_to_cat)
     print("Generating negative samples for test dataset")
-    test_neg_df = generate_negative_samples_vectorized_parallel(test_df, pop_dict, all_item_ids, max_item_id + 1, item_to_cat)
-    # test_neg_df = generate_negative_samples_vectorized_parallel(test_df, pop_dict, all_item_ids, config.test_num_samples, item_to_cat)
+    # test_neg_df = generate_negative_samples_vectorized_parallel(test_df, pop_dict, all_item_ids, max_item_id, item_to_cat)
+    test_neg_df = generate_negative_samples_vectorized_parallel(test_df, pop_dict, all_item_ids, config.test_num_samples, item_to_cat)
 
     train_df = pd.concat([train_df, train_neg_df], ignore_index=True)
     valid_df = pd.concat([valid_df, valid_neg_df], ignore_index=True)

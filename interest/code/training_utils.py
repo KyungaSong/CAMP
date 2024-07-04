@@ -1,9 +1,10 @@
 import numpy as np
-from tqdm import tqdm
 import torch
-import torch.optim as optim
-from collections import defaultdict
+import torch.nn as nn
 from sklearn.metrics import roc_auc_score
+from collections import defaultdict
+from tqdm import tqdm
+import multiprocessing as mp
 
 def train(model, data_loader, optimizer, device):
     model.train()
@@ -41,79 +42,50 @@ def evaluate(model, data_loader, device):
     return average_loss
 
 # 4) Testing
-# def test(model, data_loader, device, rank, k=10):
-#     model.eval()  
-#     total_loss = 0
-#     precision_scores = []
-#     recall_scores = []
-#     ndcg_scores = []
-#     hit_rates = []
-#     auc_scores = []
-#     mrr_scores = []
+def calculate_metrics_for_user(user_predictions, user_labels, user_items, k_list):
+    user_metrics = {k: {} for k in k_list}
+    sorted_indices = np.argsort(user_predictions)[::-1]
 
-#     if rank == 0:
-#         pbar = tqdm(data_loader, desc="Testing")
-#     else:
-#         pbar = data_loader
+    for k in k_list:
+        top_k_items = [user_items[i] for i in sorted_indices[:k]]
+        actual_items = [user_items[i] for i in range(len(user_labels)) if user_labels[i] == 1]
 
-#     with torch.no_grad():
-#         for batch in pbar:
-#             batch = {k: v.to(device) for k, v in batch.items()}
-            
-#             loss, y_int = model(batch, device)
-#             loss = loss.mean()
-#             total_loss += loss.item()
+        hits = [item in actual_items for item in top_k_items]
 
-#             # Reshape y_int to include positive and negative samples
-#             y_int = y_int.view(-1, 100)  # 1 positive + 99 negative samples
+        precision = sum(hits) / k
+        recall = sum(hits) / len(actual_items) if actual_items else 0
+        hit_rate = 1 if sum(hits) > 0 else 0
 
-#             # Calculate top-k items
-#             _, top_k_indices = torch.topk(y_int, k, dim=1)
-#             top_k_items = torch.gather(batch['item'].view(-1, 100), 1, top_k_indices)
+        # NDCG@k
+        dcg = sum(hit / np.log2(idx + 2) for idx, hit in enumerate(hits))
+        idcg = sum(1.0 / np.log2(idx + 2) for idx in range(min(len(actual_items), k)))
+        ndcg = dcg / idcg if idcg > 0 else 0
 
-#             actual_items = batch['item'].view(-1, 100)[:, 0].unsqueeze(1)
-#             hits = (top_k_items == actual_items).any(dim=1).float()
+        # AUC
+        y_true = user_labels
+        y_scores = user_predictions
+        auc_score = roc_auc_score(y_true, y_scores) if len(set(y_true)) > 1 else 0
 
-#             precision = (hits.sum() / k).item()
-#             recall = (hits.sum() / len(actual_items)).item()  # multiple positive samples per user
-#             hit_rate = hits.mean().item()
+        # MRR
+        ranks = [idx + 1 for idx, hit in enumerate(hits) if hit]
+        mrr = (1.0 / ranks[0]) if ranks else 0
 
-#             # NDCG@k
-#             actual_items_expand = actual_items.expand_as(top_k_items)
-#             dcg = torch.sum((top_k_items == actual_items_expand).float() / torch.log2(top_k_indices.float() + 2), dim=1)
-#             idcg = torch.sum(1.0 / torch.log2(torch.arange(1, k + 1).float() + 1).to(device))
-#             ndcg = (dcg / idcg).mean().item()
+        user_metrics[k] = {
+            'precision': precision,
+            'recall': recall,
+            'ndcg': ndcg,
+            'hit_rate': hit_rate,
+            'auc': auc_score,
+            'mrr': mrr
+        }
+    return user_metrics
 
-#             # AUC
-#             true_labels = torch.cat([torch.ones_like(y_int[:, :1]), torch.zeros_like(y_int[:, 1:])], dim=1).flatten()
-#             predictions = y_int.flatten()
-#             auc_score = roc_auc_score(true_labels.cpu(), predictions.cpu())
-#             auc_scores.append(auc_score)
+def test(model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs for testing")
+        model = nn.DataParallel(model)
 
-#             # MRR
-#             ranks = torch.where(top_k_items == actual_items)[1].float() + 1.0
-#             mrr = (1.0 / ranks).mean().item()
-#             mrr_scores.append(mrr)
-
-#             precision_scores.append(precision)
-#             recall_scores.append(recall)
-#             ndcg_scores.append(ndcg)
-#             hit_rates.append(hit_rate)
-    
-#     average_loss = total_loss / len(data_loader)
-#     avg_precision = np.mean(precision_scores)
-#     avg_recall = np.mean(recall_scores)
-#     avg_ndcg = np.mean(ndcg_scores)
-#     avg_hit_rate = np.mean(hit_rates)
-#     avg_auc = np.mean(auc_scores)
-#     avg_mrr = np.mean(mrr_scores)
-
-#     print(f"Test Loss: {average_loss:.4f}")
-#     print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
-#     print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
-#     return average_loss, avg_precision, avg_recall, avg_ndcg, avg_hit_rate, avg_auc, avg_mrr
-
-def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
+    model.to(device)
     model.eval()  
     total_loss = 0
     metrics = {k: {'precision_scores': [], 'recall_scores': [], 'ndcg_scores': [], 'hit_rates': [], 'auc_scores': [], 'mrr_scores': []} for k in k_list}
@@ -127,7 +99,7 @@ def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
 
-            batch['con_his'] *= inv
+            batch['con_his'] *= inv_ratio
                 
             loss, y_int = model(batch, device)
             loss = loss.mean()
@@ -153,48 +125,28 @@ def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
         labels_by_user[user_id].append(label)
         items_by_user[user_id].append(item_id)
 
-    # Calculate metrics per user
-    for user_id in predictions_by_user.keys():
-        user_predictions = predictions_by_user[user_id]
-        user_labels = labels_by_user[user_id]
-        user_items = items_by_user[user_id]
+    user_ids = list(predictions_by_user.keys())
 
-        # Sort by prediction score
-        sorted_indices = np.argsort(user_predictions)[::-1]
+    # Use a context manager to automatically manage the pool
+    with mp.Pool(mp.cpu_count()) as pool:
+        results = pool.starmap(calculate_metrics_for_user, 
+                               [(predictions_by_user[user_id], 
+                                 labels_by_user[user_id], 
+                                 items_by_user[user_id], 
+                                 k_list) for user_id in user_ids])
 
+    # Aggregate results
+    for result in results:
         for k in k_list:
-            top_k_items = [user_items[i] for i in sorted_indices[:k]]
-            actual_items = [user_items[i] for i in range(len(user_labels)) if user_labels[i] == 1]
-
-            hits = [item in actual_items for item in top_k_items]
-
-            precision = sum(hits) / k
-            recall = sum(hits) / len(actual_items) if actual_items else 0
-            hit_rate = 1 if sum(hits) > 0 else 0
-
-            # NDCG@k
-            dcg = sum(hit / np.log2(idx + 2) for idx, hit in enumerate(hits))
-            idcg = sum(1.0 / np.log2(idx + 2) for idx in range(min(len(actual_items), k)))
-            ndcg = dcg / idcg if idcg > 0 else 0
-
-            # AUC
-            y_true = user_labels
-            y_scores = user_predictions
-            auc_score = roc_auc_score(y_true, y_scores) if len(set(y_true)) > 1 else 0
-
-            # MRR
-            ranks = [idx + 1 for idx, hit in enumerate(hits) if hit]
-            mrr = (1.0 / ranks[0]) if ranks else 0
-
-            metrics[k]['precision_scores'].append(precision)
-            metrics[k]['recall_scores'].append(recall)
-            metrics[k]['ndcg_scores'].append(ndcg)
-            metrics[k]['hit_rates'].append(hit_rate)
-            metrics[k]['auc_scores'].append(auc_score)
-            metrics[k]['mrr_scores'].append(mrr)
+            metrics[k]['precision_scores'].append(result[k]['precision'])
+            metrics[k]['recall_scores'].append(result[k]['recall'])
+            metrics[k]['ndcg_scores'].append(result[k]['ndcg'])
+            metrics[k]['hit_rates'].append(result[k]['hit_rate'])
+            metrics[k]['auc_scores'].append(result[k]['auc'])
+            metrics[k]['mrr_scores'].append(result[k]['mrr'])
 
     average_loss = total_loss / len(data_loader)
-    results = {}
+    final_results = {}
     for k in k_list:
         avg_precision = np.mean(metrics[k]['precision_scores'])
         avg_recall = np.mean(metrics[k]['recall_scores'])
@@ -203,7 +155,7 @@ def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
         avg_auc = np.mean(metrics[k]['auc_scores'])
         avg_mrr = np.mean(metrics[k]['mrr_scores'])
 
-        results[k] = {
+        final_results[k] = {
             'Precision': avg_precision,
             'Recall': avg_recall,
             'NDCG': avg_ndcg,
@@ -214,8 +166,8 @@ def test(model, data_loader, device, inv, k_list=[5, 10, 20]):
         print(f"Metrics for k={k}:")
         print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
         print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
-    
-    return average_loss, results
+
+    return average_loss, final_results
 
 class EarlyStopping:
     def __init__(self, patience=7, verbose=False, delta=0):

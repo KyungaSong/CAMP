@@ -149,7 +149,7 @@ def main():
     else:
         if option == '_full':
             os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-        elif option in ['_wo_con', 'wo_qlt']:
+        elif option in ['_wo_con', 'wo_qlt', 'wo_both']:
             os.environ['CUDA_VISIBLE_DEVICES'] = '2'
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = '1'
@@ -175,12 +175,12 @@ def main():
         learning_rates = [0.001]
         batch_sizes = [64]
         embedding_dims = [64]
-    elif config.data_type == "seq":      
-        learning_rates = [0.001]
-        batch_sizes = [128]
-        embedding_dims = [64]
+    # elif config.data_type == "seq":      
+    #     learning_rates = [0.001] 
+    #     batch_sizes = [128]
+    #     embedding_dims = [64]
     else:
-        learning_rates = [0.001, 0.0001]
+        learning_rates = [0.001, 0.0005, 0.0001]
         batch_sizes = [64, 128]
         embedding_dims = [64, 128]
 
@@ -221,19 +221,19 @@ def main():
 
             # if config.dataset == "14_Sports":
             #     if config.data_type == "skew":
-            #         inv = 0.5
+            #         inv_ratio = 0.5
             #     elif config.data_type == "reg":
-            #         inv = 0.5
+            #         inv_ratio = 0.5
             # elif config.dataset == "14_Toys":
             #     if config.data_type == "skew":
-            #         inv = 0.4
+            #         inv_ratio = 0.4
             #     elif config.data_type == "reg":
-            #         inv = 0.2
+            #         inv_ratio = 0.2
 
-            for inv in np.linspace(0, 1, 11):
-                average_loss, results = test(model, test_loader, device, inv, k_list=[20])
+            for inv_ratio in np.linspace(0, 1, 11):
+                average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[20])
                 for k, metrics in results.items():
-                    logging.info(f"{inv:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+                    logging.info(f"{inv_ratio:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             
             # Clear memory and cache after each run
             del model, optimizer, scheduler, early_stopping
@@ -273,10 +273,10 @@ def main():
         else:
             raise FileNotFoundError(f"No model found at {model_path}")
         
-        for inv in np.linspace(0, 1, 11):
-            average_loss, results = test(model, test_loader, device, inv, k_list=[5, 10, 20])
+        for inv_ratio in np.linspace(0, 1, 11):
+            average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[5, 10, 20])
             for k, metrics in results.items():
-                logging.info(f"{inv} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+                logging.info(f"{inv_ratio} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
 
 if __name__ == "__main__":
     main()
