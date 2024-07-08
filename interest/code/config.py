@@ -30,6 +30,20 @@ class Config(object):
         self.wo_qlt = args.wo_qlt
 
         self.model_path = f'../../model/'
+        self.dataset_path = f'../../dataset/{self.dataset}/'
+        self.review_file_path = f'{self.dataset_path}{self.dataset}.pkl'
+        self.pop_file_path = f'{self.dataset_path}pop_{self.dataset}.pkl'
+
+        self.processed_path = f'{self.dataset_path}preprocessed/'        
+        self.split_path = f'{self.processed_path}split_df_{self.data_type}.txt'
+
+        self.pos_train_path = f'{self.processed_path}pos_train_df_{self.data_type}.txt'
+        self.pos_valid_path = f'{self.processed_path}pos_valid_df_{self.data_type}.txt'
+        self.pos_test_path = f'{self.processed_path}pos_test_df_{self.data_type}.txt'
+        
+        self.train_path = f'{self.processed_path}train_df_{self.data_type}.txt'
+        self.valid_path = f'{self.processed_path}valid_df_{self.data_type}.txt'
+        self.test_path = f'{self.processed_path}test_df_{self.data_type}.txt'
 
         self.cuda_device = args.cuda_device
         

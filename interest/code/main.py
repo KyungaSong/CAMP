@@ -15,7 +15,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 
 from config import Config
-from preprocess import load_file, preprocess_df, create_dataloader
+from preprocess import load_df, create_dataloader
 from Model import CAMP
 from training_utils import train, evaluate, test, EarlyStopping
 
@@ -51,7 +51,7 @@ parser.add_argument("--k", type=int, default=20,
 
 parser.add_argument("--dataset", type=str, default='14_Toys',
                     help="dataset file name")
-parser.add_argument("--data_type", type=str, default='skew',
+parser.add_argument("--data_type", type=str, default='unif',
                     help="dataset split type")
 parser.add_argument("--df_preprocessed", action="store_true",
                     help="flag to indicate if the dataframe has already been preprocessed")
@@ -90,47 +90,6 @@ def setup_logging(dataset_name, data_type, option):
                         format='%(asctime)s:%(levelname)s:%(message)s',
                         datefmt='%Y-%m-%d')
 
-def load_df(dataset_name):    
-    dataset_path = f'../../dataset/{dataset_name}/'
-    review_file_path = f'{dataset_path}{dataset_name}.pkl'
-    pop_file_path = f'{dataset_path}pop_{dataset_name}.pkl'
-    processed_path = f'{dataset_path}preprocessed/'
-
-    if os.path.exists(f'{processed_path}/train_df_{config.data_type}.pkl') and os.path.exists(f'{processed_path}/valid_df_{config.data_type}.pkl') and os.path.exists(f'{processed_path}/test_df_{config.data_type}.pkl') and config.df_preprocessed:
-        train_df = load_file(f'{processed_path}/train_df_{config.data_type}.pkl')
-        valid_df = load_file(f'{processed_path}/valid_df_{config.data_type}.pkl')
-        test_df = load_file(f'{processed_path}/test_df_{config.data_type}.pkl')
-        
-        combined_df = pd.concat([train_df, valid_df, test_df])
-        num_users = combined_df['user_encoded'].max() + 1
-        num_items = combined_df['item_encoded'].max() + 1
-        num_cats = combined_df['cat_encoded'].max() + 1
-
-        print("Processed dataframe already exist. Skipping datframe preparation.")
-        print(f'df: {len(combined_df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}')
-
-    else:
-        try:
-            df = load_file(review_file_path)
-            df_pop = load_file(pop_file_path)
-
-            num_users = df['user_encoded'].max() + 1
-            num_items = df['item_encoded'].max() + 1
-            num_cats = df['cat_encoded'].max() + 1            
-
-            train_df, valid_df, test_df = preprocess_df(df, df_pop, config)
-            if not os.path.exists(processed_path):
-                os.makedirs(processed_path)
-            date_str = datetime.now().strftime('%Y%m%d')
-            train_df.to_pickle(f'{processed_path}/train_df_{config.data_type}_{date_str}.pkl')
-            valid_df.to_pickle(f'{processed_path}/valid_df_{config.data_type}_{date_str}.pkl')
-            test_df.to_pickle(f'{processed_path}/test_df_{config.data_type}_{date_str}.pkl')
-        except Exception as e:
-            logging.error(f"Error during data preparation: {str(e)}")
-            raise
-    
-    return train_df, valid_df, test_df, num_users, num_items, num_cats
-
 def main():
     option = ''
     if config.wo_mid:
@@ -157,7 +116,7 @@ def main():
     setup_logging(config.dataset, config.data_type, option)
         
     print(f"Data preprocessing for dataset {config.dataset}......")
-    train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config.dataset)
+    train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config)
 
     print("Create datasets......")
     train_loader, valid_loader, test_loader = create_dataloader(train_df, valid_df, test_df)
@@ -167,18 +126,24 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     
-    if config.data_type == "skew":  
-        learning_rates = [0.001]
-        batch_sizes = [128]
-        embedding_dims = [128]
-    elif config.data_type == "reg":      
+    if config.data_type == "reg":  
         learning_rates = [0.001]
         batch_sizes = [64]
         embedding_dims = [64]
-    # elif config.data_type == "seq":      
-    #     learning_rates = [0.001] 
-    #     batch_sizes = [128]
-    #     embedding_dims = [64]
+    elif config.data_type == "unif":      
+        if config.dataset == '14_Sports':      
+            learning_rates = [0.001] 
+            batch_sizes = [128]
+            embedding_dims = [64]
+    elif config.data_type == "seq":
+        if config.dataset == '14_Sports':      
+            learning_rates = [0.001] 
+            batch_sizes = [128]
+            embedding_dims = [64]
+        if config.dataset == '14_Toys':
+            learning_rates = [0.0005] 
+            batch_sizes = [64]
+            embedding_dims = [128]
     else:
         learning_rates = [0.001, 0.0005, 0.0001]
         batch_sizes = [64, 128]
@@ -220,12 +185,12 @@ def main():
             
 
             # if config.dataset == "14_Sports":
-            #     if config.data_type == "skew":
+            #     if config.data_type == "unif":
             #         inv_ratio = 0.5
             #     elif config.data_type == "reg":
             #         inv_ratio = 0.5
             # elif config.dataset == "14_Toys":
-            #     if config.data_type == "skew":
+            #     if config.data_type == "unif":
             #         inv_ratio = 0.4
             #     elif config.data_type == "reg":
             #         inv_ratio = 0.2
@@ -258,10 +223,10 @@ def main():
             }, final_save_path)
     else:
         date_str = input("Enter the date string of the saved model (format: yymmdd): ")
-        input_data_type = input("Enter the data type of the saved model (format: reg, skew): ")
+        input_data_type = input("Enter the data type of the saved model (format: reg, unif, seq): ")
         input_option = input("Enter the option of the saved model (format: full, wo_mid, wo_both, wo_con, wo_qlt): ")
         # date_str = '240618'
-        # input_data_type = 'skew'
+        # input_data_type = 'unif'
         # input_option = 'full'
         model_path = f'../../model/{config.dataset}/{date_str}_best_model_{input_data_type}_{input_option}.pt'
         if os.path.exists(model_path):
