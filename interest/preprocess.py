@@ -22,7 +22,7 @@ def load_file(file_path):
 def load_txt(file_path, max_length=128):
     column_names = [
         'label', 'user_encoded', 'item_encoded', 'cat_encoded', 
-        'conformity', 'quality', 'unit_time', 'mid_len', 'short_len', 
+        'conformity', 'quality', 'unit_time', 'short_len', 
         'item_his_encoded', 'cat_his_encoded', 'con_his', 'qlt_his'
     ]
     df = pd.read_csv(file_path, delimiter='\t', names=column_names)
@@ -35,7 +35,6 @@ def load_txt(file_path, max_length=128):
         'conformity': float,
         'quality': float,
         'unit_time': int,
-        'mid_len': int,
         'short_len': int
     }
 
@@ -62,20 +61,15 @@ def calculate_ranges(group, k_m, k_s):
     k_m_delta = relativedelta(months=k_m)
     k_s_delta = relativedelta(months=k_s)
     group.set_index('timestamp', inplace=True)
-    
-    def get_mid_len(x):
-        start_time = max(group.index.min(), x - k_m_delta)
-        return group.loc[start_time:x].shape[0] - 1
 
     def get_short_len(x):
         start_time = max(group.index.min(), x - k_s_delta)
         return group.loc[start_time:x].shape[0] - 1
 
-    group['mid_len'] = group.index.to_series().apply(get_mid_len)
     group['short_len'] = group.index.to_series().apply(get_short_len)
     group.reset_index(inplace=True)
 
-    return group[['mid_len', 'short_len']]
+    return group[['short_len']]
 
 def split_data(df, data_type, split_path):
 
@@ -109,19 +103,19 @@ def split_data(df, data_type, split_path):
     print(f"Train ratio: {train_ratio:.2f}, Valid ratio: {valid_ratio:.2f}, Test ratio: {test_ratio:.2f}")
 
     with open(split_path, 'w') as file:
-        # split, user, item, category, timestamp, unit_time, mid_len, short_len
+        # split, user, item, category, timestamp, unit_time, _len, short_len
         for _, row in train_df.iterrows():
-            file.write(f"train\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['mid_len']}\t{row['short_len']}\n")
+            file.write(f"train\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['short_len']}\n")
         for _, row in valid_df.iterrows():
-            file.write(f"valid\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['mid_len']}\t{row['short_len']}\n")
+            file.write(f"valid\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['short_len']}\n")
         for _, row in test_df.iterrows():
-            file.write(f"test\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['mid_len']}\t{row['short_len']}\n")
+            file.write(f"test\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['short_len']}\n")
 
     return
 
 def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_test_path):    
     
-    df = pd.read_csv(split_path, sep="\t", header=None, names=['split', 'user', 'item', 'category', 'timestamp', 'unit_time', 'mid_len', 'short_len'])
+    df = pd.read_csv(split_path, sep="\t", header=None, names=['split', 'user', 'item', 'category', 'timestamp', 'unit_time', 'short_len'])
     df = df.sort_values(by=['user', 'timestamp']).reset_index(drop=True)
 
     f_train = open(pos_train_path, "w")
@@ -162,8 +156,8 @@ def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_te
         elif split == 'test':
             file = f_test
         
-        # label user_encoded item_encoded cat_encoded conformity quality unit_time mid_len short_len item_his_encoded cat_his_encoded con_his qlt_his
-        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{conformity}\t{quality}\t{row['unit_time']}\t{row['mid_len']}\t{row['short_len']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
+        # label user_encoded item_encoded cat_encoded conformity quality unit_time short_len item_his_encoded cat_his_encoded con_his qlt_his
+        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{conformity}\t{quality}\t{row['unit_time']}\t{row['short_len']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
     
     f_train.close()
     f_valid.close()
@@ -222,7 +216,6 @@ def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to
                 str(neg_sample['conformity']),
                 str(neg_sample['quality']),
                 parts[6],  # unit_time
-                parts[7],  # mid_len
                 parts[8],  # short_len
                 parts[9],  # item_his_encoded
                 parts[10],  # cat_his_encoded
@@ -321,7 +314,6 @@ class LazyDataset(Dataset):
         cat_his = torch.tensor(self.df['cat_his_encoded'].iloc[idx], dtype=torch.long)
         con_his = torch.tensor(self.df['con_his'].iloc[idx], dtype=torch.float)
         qlt_his = torch.tensor(self.df['qlt_his'].iloc[idx], dtype=torch.float)
-        mid_len = torch.tensor(self.df['mid_len'].iloc[idx], dtype=torch.int)
         short_len = torch.tensor(self.df['short_len'].iloc[idx], dtype=torch.int)
         label = torch.tensor(self.df['label'].iloc[idx], dtype=torch.long)
         
@@ -335,7 +327,6 @@ class LazyDataset(Dataset):
             'cat_his': cat_his,
             'con_his': con_his,
             'qlt_his': qlt_his,
-            'mid_len': mid_len,
             'short_len': short_len,
             'label': label
         }

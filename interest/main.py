@@ -40,12 +40,8 @@ parser.add_argument("--hidden_dim", type=int, default=128,
 parser.add_argument("--output_dim", type=int, default=1,
                     help="size of the output layer embeddings")
 
-parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
-                    help="smallest time unit for model training(default: day)")
-parser.add_argument("--k_m", type=int, default=6,
-                    help="length of mid interest(unit: month)")
-parser.add_argument("--k_s", type=int, default=1,
-                    help="length of short interest(unit: month)")
+parser.add_argument("--gamma", type=float, default=0.95,
+                    help="discount factor")
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
@@ -57,8 +53,6 @@ parser.add_argument("--df_preprocessed", action="store_true",
                     help="flag to indicate if the dataframe has already been preprocessed")
 parser.add_argument("--test_only", action="store_true",
                     help="flag to indicate if only testing should be performed")
-parser.add_argument('--wo_mid', action="store_true", 
-                    help='flag to indicate if model has mid-term module')
 parser.add_argument('--wo_con', action="store_true", 
                     help='flag to indicate if model has conformity module')
 parser.add_argument('--wo_qlt', action="store_true", 
@@ -92,9 +86,7 @@ def setup_logging(dataset_name, data_type, option):
 
 def main():
     option = ''
-    if config.wo_mid:
-        option += '_wo_mid'    
-    elif config.wo_con and config.wo_qlt:
+    if config.wo_con and config.wo_qlt:
         option += '_wo_both'
     elif config.wo_con:
         option += '_wo_con'        
@@ -224,7 +216,7 @@ def main():
     else:
         date_str = input("Enter the date string of the saved model (format: yymmdd): ")
         input_data_type = input("Enter the data type of the saved model (format: reg, unif, seq): ")
-        input_option = input("Enter the option of the saved model (format: full, wo_mid, wo_both, wo_con, wo_qlt): ")
+        input_option = input("Enter the option of the saved model (format: full, wo_both, wo_con, wo_qlt): ")
         # date_str = '240618'
         # input_data_type = 'unif'
         # input_option = 'full'

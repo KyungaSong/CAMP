@@ -9,8 +9,7 @@ class Config(object):
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
 
-        self.k_m = args.k_m
-        self.k_s = args.k_s
+        self.gamma = args.gamma
         self.k = args.k
 
         self.train_num_samples = 4
@@ -25,7 +24,6 @@ class Config(object):
         self.regularization_weight = args.regularization_weight
         self.discrepancy_loss_weight = args.discrepancy_loss_weight
 
-        self.wo_mid = args.wo_mid
         self.wo_con = args.wo_con
         self.wo_qlt = args.wo_qlt
 
