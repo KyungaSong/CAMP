@@ -27,8 +27,8 @@ class Config(object):
         self.wo_con = args.wo_con
         self.wo_qlt = args.wo_qlt
 
-        self.model_path = f'../../model/'
-        self.dataset_path = f'../../dataset/{self.dataset}/'
+        self.model_save_path = f'../model/{self.dataset}/'
+        self.dataset_path = f'../dataset/{self.dataset}/'
         self.review_file_path = f'{self.dataset_path}{self.dataset}.pkl'
         self.pop_file_path = f'{self.dataset_path}pop_{self.dataset}.pkl'
 

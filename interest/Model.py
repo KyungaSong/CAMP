@@ -104,10 +104,10 @@ def short_term_interest_proxy(combined_his_embeds, discount_factor):
     device = combined_his_embeds.device
     seq_len = combined_his_embeds.size(1)
     time_steps = torch.arange(seq_len, 0, -1, device=device).unsqueeze(0).expand_as(combined_his_embeds[:,:,0])
-    discounts = torch.pow(discount_factor, time_steps - 1)  # Compute exponential discounts for each time step
+    discounts = torch.pow(discount_factor, time_steps - 1)  
 
-    discounted_history = combined_his_embeds * discounts.unsqueeze(-1).type_as(combined_his_embeds)  # Apply discounts
-    p_s_t = discounted_history.sum(dim=1) / discounts.sum(dim=1).unsqueeze(-1)  # Weighted average
+    discounted_history = combined_his_embeds * discounts.unsqueeze(-1).type_as(combined_his_embeds)  
+    p_s_t = discounted_history.sum(dim=1) / discounts.sum(dim=1).unsqueeze(-1)  
 
     return p_s_t
 
@@ -222,6 +222,7 @@ class CAMP(nn.Module):
         self.discrepancy_loss_weight = config.discrepancy_loss_weight
 
     def forward(self, batch, device):
+        print("discrepancy_loss_weight", self.discrepancy_loss_weight)
         user_ids = batch['user']
         item_ids = batch['item']
         cat_ids = batch['cat']
@@ -231,7 +232,6 @@ class CAMP(nn.Module):
         cats_history_padded = batch['cat_his']
         con_his = batch['con_his']
         qlt_his = batch['qlt_his']
-        short_lens = batch['short_len']
         labels = batch['label'].float()
 
         user_embeds = self.user_embedding(user_ids)
@@ -255,17 +255,18 @@ class CAMP(nn.Module):
             combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds, qlt_his_embeds), dim=-1)
 
         z_l = self.long_term_module(combined_his_embeds, user_embeds)
+        print("z_l", z_l)
         z_s = self.short_term_module(combined_his_embeds, user_embeds)
 
         p_l = long_term_interest_proxy(combined_his_embeds)
-        p_s = short_term_interest_proxy(combined_his_embeds, short_lens)
+        p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
         loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
 
         y_int = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds)
         labels = labels.view(-1, 1)
         loss_bce = self.bce_loss_module(y_int, labels)
 
-        loss_discrepancy = compute_discrepancy_loss(z_l, self.discrepancy_loss_weight)
+        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_loss_weight)
 
         regularization_loss = self.regularization_weight * sum(torch.norm(param) for param in self.parameters())
 

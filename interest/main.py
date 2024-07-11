@@ -70,10 +70,7 @@ args = parser.parse_args()
 config = Config(args=args)
 
 def setup_logging(dataset_name, data_type, option):
-    log_dir = os.path.abspath('../../log')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-
+    log_dir = os.path.abspath('../log')
     dataset_log_dir = os.path.join(log_dir, dataset_name)
     if not os.path.exists(dataset_log_dir):
         os.makedirs(dataset_log_dir)
@@ -127,6 +124,10 @@ def main():
             learning_rates = [0.001] 
             batch_sizes = [128]
             embedding_dims = [64]
+        else:
+            learning_rates = [0.001, 0.0005, 0.0001]
+            batch_sizes = [64, 128]
+            embedding_dims = [64, 128]
     elif config.data_type == "seq":
         if config.dataset == '14_Sports':      
             learning_rates = [0.001] 
@@ -202,11 +203,10 @@ def main():
             date_str = datetime.now().strftime('%y%m%d')
             config.embedding_dim = best_model_params['embedding_dim']
             model = CAMP(num_users, num_items, num_cats, config).to(device)
-            model.load_state_dict(best_model)
-            model_save_path = f'../../model/{config.dataset}/'     
-            final_save_path = f'{model_save_path}{date_str}_best_model_{config.data_type}{option}.pt'
-            if not os.path.exists(os.path.dirname(model_save_path)):
-                os.makedirs(os.path.dirname(model_save_path))
+            model.load_state_dict(best_model)    
+            final_save_path = f'{config.model_save_path}{date_str}_best_model_{config.data_type}{option}.pt'
+            if not os.path.exists(os.path.dirname(config.model_save_path)):
+                os.makedirs(os.path.dirname(config.model_save_path))
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'embedding_dim': best_model_params['embedding_dim'],  # Save the best embedding dimension
@@ -220,7 +220,7 @@ def main():
         # date_str = '240618'
         # input_data_type = 'unif'
         # input_option = 'full'
-        model_path = f'../../model/{config.dataset}/{date_str}_best_model_{input_data_type}_{input_option}.pt'
+        model_path = f'../model/{config.dataset}/{date_str}_best_model_{input_data_type}_{input_option}.pt'
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             config.embedding_dim = checkpoint['embedding_dim']

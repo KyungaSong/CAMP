@@ -22,7 +22,7 @@ def load_file(file_path):
 def load_txt(file_path, max_length=128):
     column_names = [
         'label', 'user_encoded', 'item_encoded', 'cat_encoded', 
-        'conformity', 'quality', 'unit_time', 'short_len', 
+        'conformity', 'quality', 'unit_time',
         'item_his_encoded', 'cat_his_encoded', 'con_his', 'qlt_his'
     ]
     df = pd.read_csv(file_path, delimiter='\t', names=column_names)
@@ -35,13 +35,10 @@ def load_txt(file_path, max_length=128):
         'conformity': float,
         'quality': float,
         'unit_time': int,
-        'short_len': int
     }
 
     for col, dtype in type_conversion.items():
         df[col] = df[col].astype(dtype)
-
-    print(df.head(10))
 
     int_columns = ['item_his_encoded', 'cat_his_encoded']
     float_columns = ['con_his', 'qlt_his']
@@ -57,20 +54,6 @@ def load_txt(file_path, max_length=128):
 
     return df
 
-def calculate_ranges(group, k_m, k_s):
-    k_m_delta = relativedelta(months=k_m)
-    k_s_delta = relativedelta(months=k_s)
-    group.set_index('timestamp', inplace=True)
-
-    def get_short_len(x):
-        start_time = max(group.index.min(), x - k_s_delta)
-        return group.loc[start_time:x].shape[0] - 1
-
-    group['short_len'] = group.index.to_series().apply(get_short_len)
-    group.reset_index(inplace=True)
-
-    return group[['short_len']]
-
 def split_data(df, data_type, split_path):
 
     num_users = df['user_encoded'].max() + 1
@@ -83,8 +66,9 @@ def split_data(df, data_type, split_path):
     elif data_type == 'unif':
         test_size = int(len(df) * 0.2)
         max_sample_size = test_size // df['item_encoded'].nunique()
-        test_df = df.groupby('item_encoded').apply(lambda x: x.sample(n=min(len(x), max_sample_size), random_state=42)).reset_index(drop=True)
-        temp_df = df.drop(test_df.index)
+        test_df = df.groupby('item_encoded').apply(lambda x: x.sample(n=min(len(x), max_sample_size), random_state=42)).reset_index(level=0, drop=True)
+        temp_df = df.drop(test_df.index)  # MultiIndex를 제거한 후의 인덱스를 사용
+        temp_df = temp_df.reset_index(drop=True) 
         train_df, valid_df = train_test_split(temp_df, test_size=0.1, random_state=42)
     elif data_type == 'seq':
         train_df = df[df['unit_time'] < max_time - 1]
@@ -103,19 +87,19 @@ def split_data(df, data_type, split_path):
     print(f"Train ratio: {train_ratio:.2f}, Valid ratio: {valid_ratio:.2f}, Test ratio: {test_ratio:.2f}")
 
     with open(split_path, 'w') as file:
-        # split, user, item, category, timestamp, unit_time, _len, short_len
+        # split, user, item, category, timestamp, unit_time
         for _, row in train_df.iterrows():
-            file.write(f"train\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['short_len']}\n")
+            file.write(f"train\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\n")
         for _, row in valid_df.iterrows():
-            file.write(f"valid\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['short_len']}\n")
+            file.write(f"valid\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\n")
         for _, row in test_df.iterrows():
-            file.write(f"test\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\t{row['short_len']}\n")
+            file.write(f"test\t{row['user_encoded']}\t{row['item_encoded']}\t{row['cat_encoded']}\t{row['timestamp']}\t{row['unit_time']}\n")
 
     return
 
 def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_test_path):    
     
-    df = pd.read_csv(split_path, sep="\t", header=None, names=['split', 'user', 'item', 'category', 'timestamp', 'unit_time', 'short_len'])
+    df = pd.read_csv(split_path, sep="\t", header=None, names=['split', 'user', 'item', 'category', 'timestamp', 'unit_time'])
     df = df.sort_values(by=['user', 'timestamp']).reset_index(drop=True)
 
     f_train = open(pos_train_path, "w")
@@ -156,8 +140,8 @@ def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_te
         elif split == 'test':
             file = f_test
         
-        # label user_encoded item_encoded cat_encoded conformity quality unit_time short_len item_his_encoded cat_his_encoded con_his qlt_his
-        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{conformity}\t{quality}\t{row['unit_time']}\t{row['short_len']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
+        # label user_encoded item_encoded cat_encoded conformity quality unit_time item_his_encoded cat_his_encoded con_his qlt_his
+        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{conformity}\t{quality}\t{row['unit_time']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
     
     f_train.close()
     f_valid.close()
@@ -202,7 +186,7 @@ def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to
         parts = line.strip().split('\t')
         item_encoded = int(parts[2])
         unit_time = int(parts[6])
-        item_his_encoded = set(map(int, parts[9].split(',')))
+        item_his_encoded = set(map(int, parts[7].split(',')))
 
         # negative sample 생성
         neg_samples = neg_samples_for_row(all_item_ids, item_encoded, item_his_encoded, num_samples, item_to_cat, pop_dict, unit_time)
@@ -216,11 +200,10 @@ def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to
                 str(neg_sample['conformity']),
                 str(neg_sample['quality']),
                 parts[6],  # unit_time
-                parts[8],  # short_len
-                parts[9],  # item_his_encoded
-                parts[10],  # cat_his_encoded
-                parts[11],  # con_his
-                parts[12]   # qlt_his
+                parts[7],  # item_his_encoded
+                parts[8],  # cat_his_encoded
+                parts[9],  # con_his
+                parts[10]   # qlt_his
             ])
             results.append(neg_sample_line)
 
@@ -248,12 +231,7 @@ def preprocess_df(config):
 
     df = df.sort_values(by=['user_encoded', 'timestamp'])
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
-    pop_dict = create_pop_dict(df_pop)
-
-    ranges_df = df.groupby('user_encoded', group_keys=False).apply(lambda x: calculate_ranges(x, config.k_m, config.k_s), include_groups=False)
-    df.reset_index(drop=True, inplace=True)
-    ranges_df.reset_index(drop=True, inplace=True)
-    df = pd.concat([df, ranges_df], axis=1)    
+    pop_dict = create_pop_dict(df_pop)    
     
     split_data(df, config.data_type, config.split_path)
     save_pos_sample(config.split_path, pop_dict, config.pos_train_path, config.pos_valid_path, config.pos_test_path)
@@ -269,7 +247,7 @@ def preprocess_df(config):
     save_neg_samples(config.pos_test_path, config.test_path, config.test_num_samples, all_item_ids, item_to_cat, pop_dict)
     print("All samples saved successfully.")
 
-    del df, ranges_df
+    del df
     gc.collect()
 
     return num_users, num_items, num_cats
@@ -314,7 +292,6 @@ class LazyDataset(Dataset):
         cat_his = torch.tensor(self.df['cat_his_encoded'].iloc[idx], dtype=torch.long)
         con_his = torch.tensor(self.df['con_his'].iloc[idx], dtype=torch.float)
         qlt_his = torch.tensor(self.df['qlt_his'].iloc[idx], dtype=torch.float)
-        short_len = torch.tensor(self.df['short_len'].iloc[idx], dtype=torch.int)
         label = torch.tensor(self.df['label'].iloc[idx], dtype=torch.long)
         
         data = {
@@ -327,7 +304,6 @@ class LazyDataset(Dataset):
             'cat_his': cat_his,
             'con_his': con_his,
             'qlt_his': qlt_his,
-            'short_len': short_len,
             'label': label
         }
         return data

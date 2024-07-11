@@ -36,10 +36,6 @@ parser.add_argument("--lr", type=float, default=0.001,
                     help="learning rate")
 parser.add_argument("--num_epochs", type=int, default=30,
                     help="training epochs")
-parser.add_argument("--time_unit", type=int, default=1000*60*60*24,
-                    help="smallest time unit for model training(default: day)")
-parser.add_argument("--pop_time_unit", type=int, default=30*3,
-                    help="smallest time unit for item popularity statistic")
 parser.add_argument("--dataset", type=str, default='14_Sports',
                     help="dataset file name")
 parser.add_argument("--data_preprocessed", action="store_true",
@@ -60,10 +56,7 @@ args = parser.parse_args()
 config = Config(args=args)
 
 def setup_logging(dataset_name):
-    log_dir = os.path.abspath('../../pop_log')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-
+    log_dir = os.path.abspath('../pop_log')
     dataset_log_dir = os.path.join(log_dir, dataset_name)
     if not os.path.exists(dataset_log_dir):
         os.makedirs(dataset_log_dir)
@@ -75,7 +68,7 @@ def setup_logging(dataset_name):
                         datefmt='%Y-%m-%d')
 
 def load_data(dataset_name):
-    dataset_path = f'../../dataset/{dataset_name}/'    
+    dataset_path = f'../dataset/{dataset_name}/'    
     sampled_file_path = f'{dataset_path}{dataset_name}.pkl'      
     processed_path = f'{dataset_path}preprocessed/'
 
@@ -98,7 +91,7 @@ def load_data(dataset_name):
     else:
         try:
             if config.dataset[:8] == 'sampled_':
-                review_file_path = f'../../dataset/{dataset_name[8:]}/{dataset_name[8:]}.pkl'
+                review_file_path = f'../dataset/{dataset_name[8:]}/{dataset_name[8:]}.pkl'
                 df = load_dataset(review_file_path)
                 sampled_df = load_dataset(sampled_file_path)
                 sampled_items = sampled_df['item_encoded'].unique()
@@ -242,7 +235,7 @@ def main():
         config.embedding_dim = best_model_params['embedding_dim']
         model = PopPredict(config, num_items, num_cats, num_stores, max_time).to(device)
         model.load_state_dict(best_model)
-        model_save_path = f'../../model/pop/{config.dataset}/best_model.pt'
+        model_save_path = f'../model/pop/{config.dataset}/best_model.pt'
         if not os.path.exists(os.path.dirname(model_save_path)):
             os.makedirs(os.path.dirname(model_save_path))
         torch.save({
@@ -269,7 +262,7 @@ def main():
     results_df['quality'] = results_df['weighted_sideinfo_output'].apply(lambda x: x[0])
     results_df = results_df[['item_encoded', 'unit_time', 'time_output', 'conformity', 'quality']]
 
-    result_path = f'../../dataset/{config.dataset}/pop_{config.dataset}.pkl'
+    result_path = f'../dataset/{config.dataset}/pop_{config.dataset}.pkl'
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
     results_df.to_pickle(result_path)
     print(f"Results saved to {result_path}")
