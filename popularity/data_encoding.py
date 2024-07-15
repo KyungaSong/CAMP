@@ -39,7 +39,7 @@ def load_meta_data(meta_file_path):
                 asin = entry.get('asin')
                 if asin:
                     categories = entry.get('categories', [])
-                    category = categories[0][1] if len(categories[0]) > 1 else (categories[0][0] if len(categories[0]) == 1 else 'Baby')
+                    category = categories[0][1] if len(categories[0]) > 1 else (categories[0][0] if len(categories[0]) == 1 else 'Toys & Games')
                     meta_data[asin] = {
                         'store': entry.get('brand'),
                         'category': category  
@@ -60,7 +60,7 @@ def merge_chunks(raw_review_file_path, meta_data, chunk_size=100000):
         for line in file:
             entry = json.loads(line)
             filtered_entry = {k: entry[k] for k in columns_to_keep}
-            meta_info = meta_data.get(filtered_entry['asin'], {'store': None, 'category': 'Sports & Outdoors'})
+            meta_info = meta_data.get(filtered_entry['asin'], {'store': None, 'category': 'Toys & Games'})
             filtered_entry.update(meta_info)
             chunk.append(filtered_entry)
             if len(chunk) >= chunk_size:
