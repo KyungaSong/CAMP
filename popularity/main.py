@@ -17,7 +17,8 @@ from torch.optim.lr_scheduler import StepLR
 import torch.distributed as dist
 
 from config import Config
-from preprocess import load_dataset, preprocess_df, create_datasets
+from data_encoding import data_encoding
+from preprocess import load_df, create_datasets
 from Model import PopPredict
 from training_utils import train, evaluate, test, EarlyStopping
 
@@ -51,12 +52,13 @@ parser.add_argument("--wt_time", type=float, default=1,
 parser.add_argument("--wt_side", type=float, default=1,
                     help="Weight parameter for balancing the loss contribution of side_information")
 
+parser.add_argument('--cuda_device', type=str, help='CUDA device to use')
 
 args = parser.parse_args()
 config = Config(args=args)
 
 def setup_logging(dataset_name):
-    log_dir = os.path.abspath('../pop_log')
+    log_dir = os.path.abspath('./log')
     dataset_log_dir = os.path.join(log_dir, dataset_name)
     if not os.path.exists(dataset_log_dir):
         os.makedirs(dataset_log_dir)
@@ -66,81 +68,6 @@ def setup_logging(dataset_name):
     logging.basicConfig(filename=log_file, level=logging.DEBUG,
                         format='%(asctime)s:%(levelname)s:%(message)s',
                         datefmt='%Y-%m-%d')
-
-def load_data(dataset_name):
-    dataset_path = f'../dataset/{dataset_name}/'    
-    sampled_file_path = f'{dataset_path}{dataset_name}.pkl'      
-    processed_path = f'{dataset_path}preprocessed/'
-
-    combined_df = None  
-
-    if os.path.exists(f'{processed_path}/train_df_pop.pkl') and os.path.exists(f'{processed_path}/valid_df_pop.pkl') and os.path.exists(f'{processed_path}/test_df_pop.pkl') and config.data_preprocessed:
-        with open(f'{processed_path}/train_df_pop.pkl', 'rb') as file:
-            train_df = pickle.load(file)
-        with open(f'{processed_path}/valid_df_pop.pkl', 'rb') as file:
-            valid_df = pickle.load(file)
-        with open(f'{processed_path}/test_df_pop.pkl', 'rb') as file:
-            test_df = pickle.load(file)
-
-        combined_df = pd.concat([train_df, valid_df, test_df])
-        num_items = combined_df['item_encoded'].max() + 1
-        num_cats = combined_df['cat_encoded'].max() + 1
-        num_stores = combined_df['store_encoded'].max() + 1
-        max_time = combined_df["unit_time"].max()
-        print("Processed files already exist. Skipping dataset preparation.")
-    else:
-        try:
-            if config.dataset[:8] == 'sampled_':
-                review_file_path = f'../dataset/{dataset_name[8:]}/{dataset_name[8:]}.pkl'
-                df = load_dataset(review_file_path)
-                sampled_df = load_dataset(sampled_file_path)
-                sampled_items = sampled_df['item_encoded'].unique()
-                filtered_df = df[df['item_encoded'].isin(sampled_items)]
-            else:
-                filtered_df = load_dataset(sampled_file_path)
-
-            num_items = filtered_df['item_encoded'].max() + 1
-            num_cats = filtered_df['cat_encoded'].max() + 1
-            num_stores = filtered_df['store_encoded'].max() + 1
-
-            train_df, valid_df, test_df, max_time = preprocess_df(filtered_df, config)
-            combined_df = pd.concat([train_df, valid_df, test_df])
-            if not os.path.exists(processed_path):
-                os.makedirs(processed_path)
-            date_str = datetime.now().strftime('%y%m%d%H%M')
-            train_df.to_pickle(f'{processed_path}/train_df_pop_{date_str}.pkl')
-            valid_df.to_pickle(f'{processed_path}/valid_df_pop_{date_str}.pkl')
-            test_df.to_pickle(f'{processed_path}/test_df_pop_{date_str}.pkl')
-
-        except Exception as e:
-            raise
-
-    if 'df' in locals():
-        del df
-    gc.collect()
-
-    return train_df, valid_df, test_df, combined_df, num_items, num_cats, num_stores, max_time
-
-def load_model_state(model, checkpoint_path, device):
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    embedding_dim = checkpoint['embedding_dim']
-    
-    model.item_embedding = nn.Embedding(model.item_embedding.num_embeddings, embedding_dim).to(device)
-    model.cat_embedding = nn.Embedding(model.cat_embedding.num_embeddings, embedding_dim).to(device)
-    model.store_embedding = nn.Embedding(model.store_embedding.num_embeddings, embedding_dim).to(device)
-    model.time_embedding = nn.Embedding(model.time_embedding.num_embeddings, embedding_dim).to(device)
-        
-    model.module_time.fc_time_value = nn.Linear(4 * embedding_dim, 1).to(device)
-    model.module_sideinfo.fc_output = nn.Linear(2 * embedding_dim, 1).to(device)
-
-    new_state_dict = {}
-    for k, v in checkpoint['model_state_dict'].items():
-        if k.startswith('module.'):
-            new_state_dict[k[7:]] = v  # remove 'module.' prefix
-        else:
-            new_state_dict[k] = v
-    model.load_state_dict(new_state_dict)
-    model.to(device)
 
 def generate_outputs(model, data_loader, device):
     model.eval()
@@ -162,13 +89,18 @@ def generate_outputs(model, data_loader, device):
 def main():
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
     setup_logging(config.dataset)
+
+    if not os.path.exists(config.review_file_path):
+        data_encoding(config)
+    else:
+        print(f"{config.review_file_path} already exists.")
 
     best_loss = float('inf')
     best_model_params = {}
-    model_save_path = None
 
-    train_df, valid_df, test_df, combined_df, num_items, num_cats, num_stores, max_time = load_data(config.dataset)
+    train_df, valid_df, test_df, combined_df, num_items, num_cats, num_stores, max_time = load_df(config)
     gc.collect()
     
     train_dataset, valid_dataset, test_dataset = create_datasets(train_df, valid_df, test_df)
@@ -181,7 +113,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    lr_values = [0.001, 0.01]  # Learning rates to try
+    lr_values = [0.001, 0.005, 0.01]  # Learning rates to try
     batch_size_values = [32, 64]  # Batch sizes to try
     embedding_dim_values = [64, 128]  # Embedding dimensions to try
 
@@ -192,7 +124,6 @@ def main():
 
     best_loss = float('inf')
     best_model_params = {}
-    best_model = None
 
     for lr, batch_size, embedding_dim in itertools.product(lr_values, batch_size_values, embedding_dim_values): 
         print(f"Training with lr={lr}, batch_size={batch_size}, embedding_dim={embedding_dim}")
@@ -232,18 +163,20 @@ def main():
 
     if best_model is not None:
         print(f"Best Model Parameters: {best_model_params}")
+        logging.info(f"Best Model Parameters: {best_model_params}")
+        date_str = datetime.now().strftime('%y%m%d')
         config.embedding_dim = best_model_params['embedding_dim']
         model = PopPredict(config, num_items, num_cats, num_stores, max_time).to(device)
         model.load_state_dict(best_model)
-        model_save_path = f'../model/pop/{config.dataset}/best_model.pt'
-        if not os.path.exists(os.path.dirname(model_save_path)):
-            os.makedirs(os.path.dirname(model_save_path))
+        final_save_path = f'{config.model_save_path}{date_str}_best_model.pt'
+        if not os.path.exists(os.path.dirname(config.model_save_path)):
+            os.makedirs(os.path.dirname(config.model_save_path))
         torch.save({
             'model_state_dict': model.state_dict(),
             'embedding_dim': best_model_params['embedding_dim'],  # Save the best embedding dimension
             'lr': best_model_params['lr'],
             'batch_size': best_model_params['batch_size']
-        }, model_save_path)
+        }, final_save_path)
         
         test_loss, test_rmse = test(config, model, test_loader, device)
         logging.info(f'Test Loss: {test_loss:.4f}, Test RMSE: {test_rmse:.4f}')
@@ -262,8 +195,7 @@ def main():
     results_df['quality'] = results_df['weighted_sideinfo_output'].apply(lambda x: x[0])
     results_df = results_df[['item_encoded', 'unit_time', 'time_output', 'conformity', 'quality']]
 
-    result_path = f'../dataset/{config.dataset}/pop_{config.dataset}.pkl'
-    os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    result_path = f'{config.dataset_path}/pop_{config.dataset}.pkl'
     results_df.to_pickle(result_path)
     print(f"Results saved to {result_path}")
 

@@ -222,7 +222,6 @@ class CAMP(nn.Module):
         self.discrepancy_loss_weight = config.discrepancy_loss_weight
 
     def forward(self, batch, device):
-        print("discrepancy_loss_weight", self.discrepancy_loss_weight)
         user_ids = batch['user']
         item_ids = batch['item']
         cat_ids = batch['cat']
@@ -255,7 +254,6 @@ class CAMP(nn.Module):
             combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds, qlt_his_embeds), dim=-1)
 
         z_l = self.long_term_module(combined_his_embeds, user_embeds)
-        print("z_l", z_l)
         z_s = self.short_term_module(combined_his_embeds, user_embeds)
 
         p_l = long_term_interest_proxy(combined_his_embeds)

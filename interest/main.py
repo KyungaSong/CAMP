@@ -10,7 +10,6 @@ import argparse
 import itertools
 
 import torch
-from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 
@@ -45,10 +44,15 @@ parser.add_argument("--gamma", type=float, default=0.95,
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
+parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01, 
+                    help='Loss weight for discrepancy between long and short term user embedding.')
+parser.add_argument('--regularization_weight', type=float, default=0.0001, 
+                    help='weight for L2 regularization applied to model parameters')
+
 parser.add_argument("--dataset", type=str, default='14_Toys',
                     help="dataset file name")
 parser.add_argument("--data_type", type=str, default='unif',
-                    help="dataset split type")
+                    help="dataset split type(reg, unif, seq)")
 parser.add_argument("--df_preprocessed", action="store_true",
                     help="flag to indicate if the dataframe has already been preprocessed")
 parser.add_argument("--test_only", action="store_true",
@@ -60,17 +64,12 @@ parser.add_argument('--wo_qlt', action="store_true",
 
 parser.add_argument('--cuda_device', type=str, help='CUDA device to use')
 
-parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01, 
-                    help='Loss weight for discrepancy between long and short term user embedding.')
-parser.add_argument('--regularization_weight', type=float, default=0.0001, 
-                    help='weight for L2 regularization applied to model parameters')
-
 
 args = parser.parse_args()
 config = Config(args=args)
 
 def setup_logging(dataset_name, data_type, option):
-    log_dir = os.path.abspath('../log')
+    log_dir = os.path.abspath('./log')
     dataset_log_dir = os.path.join(log_dir, dataset_name)
     if not os.path.exists(dataset_log_dir):
         os.makedirs(dataset_log_dir)
@@ -97,10 +96,12 @@ def main():
     else:
         if option == '_full':
             os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-        elif option in ['_wo_con', 'wo_qlt', 'wo_both']:
+        elif option == '_wo_con':
             os.environ['CUDA_VISIBLE_DEVICES'] = '2'
-        else:
+        elif option == '_wo_qlt':
             os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '0'
         
     setup_logging(config.dataset, config.data_type, option)
         
@@ -125,9 +126,9 @@ def main():
             batch_sizes = [128]
             embedding_dims = [64]
         else:
-            learning_rates = [0.001, 0.0005, 0.0001]
-            batch_sizes = [64, 128]
-            embedding_dims = [64, 128]
+            learning_rates = [0.0005]
+            batch_sizes = [64]
+            embedding_dims = [64]
     elif config.data_type == "seq":
         if config.dataset == '14_Sports':      
             learning_rates = [0.001] 
@@ -187,11 +188,15 @@ def main():
             #         inv_ratio = 0.4
             #     elif config.data_type == "reg":
             #         inv_ratio = 0.2
-
-            for inv_ratio in np.linspace(0, 1, 11):
-                average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[20])
+            if option in ['_wo_con', '_wo_both']:
+                average_loss, results = test(model, test_loader, device, 1, k_list=[20])
                 for k, metrics in results.items():
                     logging.info(f"{inv_ratio:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+            else:
+                for inv_ratio in np.linspace(0, 1, 11):
+                    average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[20])
+                    for k, metrics in results.items():
+                        logging.info(f"{inv_ratio:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             
             # Clear memory and cache after each run
             del model, optimizer, scheduler, early_stopping

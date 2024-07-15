@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import pickle
@@ -5,7 +6,7 @@ import gc
 import torch
 from torch.utils.data import Dataset
 
-def load_dataset(file_path, meta = False):
+def load_pkl(file_path, meta = False):
     with open(file_path, 'rb') as file:
         df = pickle.load(file)         
     return df
@@ -24,12 +25,10 @@ def expand_time(row, max_time):
 
 def preprocess_df(df, config): 
     df = df.copy()
-
     df = df.sort_values(by=['item_encoded', 'unit_time'])
 
     min_unit_time = df.groupby('item_encoded')['unit_time'].transform('min')
     df.loc[:, 'release_time'] = min_unit_time
-
     max_time = df["unit_time"].max()
     print("max_time", max_time)
     time_range = list(range(0, max_time+1))
@@ -61,6 +60,42 @@ def preprocess_df(df, config):
     gc.collect()
 
     return train_df, valid_df, test_df, max_time
+
+def load_df(config):
+    if os.path.exists(config.pop_train_path) and os.path.exists(config.pop_valid_path) and os.path.exists(config.pop_test_path) and config.data_preprocessed:
+        with open(config.pop_train_path, 'rb') as file:
+            train_df = pickle.load(file)
+        with open(config.pop_valid_path, 'rb') as file:
+            valid_df = pickle.load(file)
+        with open(config.pop_test_path, 'rb') as file:
+            test_df = pickle.load(file)
+
+        combined_df = pd.concat([train_df, valid_df, test_df])
+        num_items = combined_df['item_encoded'].max() + 1
+        num_cats = combined_df['cat_encoded'].max() + 1
+        num_stores = combined_df['store_encoded'].max() + 1
+        max_time = combined_df["unit_time"].max()
+        print("Processed files already exist. Skipping dataset preparation.")
+    else:
+        df = load_pkl(config.review_file_path)
+
+        num_items = df['item_encoded'].max() + 1
+        num_cats = df['cat_encoded'].max() + 1
+        num_stores = df['store_encoded'].max() + 1
+
+        train_df, valid_df, test_df, max_time = preprocess_df(df, config)
+        combined_df = pd.concat([train_df, valid_df, test_df])
+        if not os.path.exists(config.processed_path):
+            os.makedirs(config.processed_path)
+        train_df.to_pickle(config.pop_train_path)
+        valid_df.to_pickle(config.pop_valid_path)
+        test_df.to_pickle(config.pop_test_path)
+
+    if 'df' in locals():
+        del df
+    gc.collect()
+
+    return train_df, valid_df, test_df, combined_df, num_items, num_cats, num_stores, max_time
 
 class MakeDataset(Dataset):
     def __init__(self, items, times, release_times, pop_histories, average_ratings, categories, stores):
