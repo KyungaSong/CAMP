@@ -23,11 +23,11 @@ torch.manual_seed(2024)
 torch.cuda.manual_seed(2024)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--lr", type=float, default=0.001,
+parser.add_argument("--lr", type=float, default=0.0005,
                     help="learning rate")
 parser.add_argument("--num_epochs", type=int, default=200,
                     help="training epochs")
-parser.add_argument("--batch_size", type=int, default=256,
+parser.add_argument("--batch_size", type=int, default=64,
                     help="batch size for training")
 parser.add_argument("--dropout_rate", type=float, default=0.5,
                     help="dropout rate for model")
