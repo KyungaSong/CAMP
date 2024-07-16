@@ -1,10 +1,7 @@
 import random
-import pickle
-import time
 import logging
 import os
 from datetime import datetime
-import pandas as pd
 import numpy as np
 import argparse
 import itertools
@@ -116,28 +113,40 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     
-    if config.data_type == "reg":  
-        learning_rates = [0.001]
-        batch_sizes = [64]
-        embedding_dims = [64]
-    elif config.data_type == "unif":      
-        if config.dataset == '14_Sports':      
-            learning_rates = [0.001] 
+    if config.dataset == '14_Sports':
+        if config.data_type == "unif":      
+            learning_rates = [0.0005] 
             batch_sizes = [128]
-            embedding_dims = [64]
+            embedding_dims = [128]        
+        # elif config.data_type == "seq":
+        #     learning_rates = [0.001] 
+        #     batch_sizes = [128]
+        #     embedding_dims = [64]
+        # elif config.data_type == "reg":  
+        #     learning_rates = [0.001]
+        #     batch_sizes = [64]
+        #     embedding_dims = [64]
         else:
-            learning_rates = [0.0005]
-            batch_sizes = [64]
-            embedding_dims = [64]
-    elif config.data_type == "seq":
-        if config.dataset == '14_Sports':      
-            learning_rates = [0.001] 
-            batch_sizes = [128]
-            embedding_dims = [64]
-        if config.dataset == '14_Toys':
+            learning_rates = [0.001, 0.0005, 0.0001]
+            batch_sizes = [64, 128]
+            embedding_dims = [64, 128]
+    elif config.dataset == '14_Toys':
+        if config.data_type == "unif":      
             learning_rates = [0.0005] 
             batch_sizes = [64]
-            embedding_dims = [128]
+            embedding_dims = [128]   
+        # elif config.data_type == "seq":
+        #     learning_rates = [0.0005] 
+        #     batch_sizes = [64]
+        #     embedding_dims = [128]
+        # elif config.data_type == "reg": 
+        #     learning_rates = [0.0005]
+        #     batch_sizes = [64]
+        #     embedding_dims = [64]
+        else:
+            learning_rates = [0.001, 0.0005, 0.0001]
+            batch_sizes = [64, 128]
+            embedding_dims = [64, 128]
     else:
         learning_rates = [0.001, 0.0005, 0.0001]
         batch_sizes = [64, 128]
@@ -189,7 +198,8 @@ def main():
             #     elif config.data_type == "reg":
             #         inv_ratio = 0.2
             if option in ['_wo_con', '_wo_both']:
-                average_loss, results = test(model, test_loader, device, 1, k_list=[20])
+                inv_ratio = 1
+                average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[20])
                 for k, metrics in results.items():
                     logging.info(f"{inv_ratio:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             else:
