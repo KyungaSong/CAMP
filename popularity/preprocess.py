@@ -23,7 +23,7 @@ def expand_time(row, max_time):
         'store_encoded': [row['store_encoded']] * len(unit_times)
     })
 
-def preprocess_df(df, config): 
+def preprocess_df(df, pop_dict_path): 
     df = df.copy()
     df = df.sort_values(by=['item_encoded', 'unit_time'])
 
@@ -36,8 +36,19 @@ def preprocess_df(df, config):
     count_per_group = df.groupby(['item_encoded', 'unit_time']).size().unstack(fill_value=0)
     count_per_group = count_per_group.reindex(columns=time_range, fill_value=0)
 
+    # Create pd_pop_dict
+    pop_pd_group = count_per_group + 1
+    pop_pd_group = pop_pd_group.apply(lambda row: (row - row.min()) / (row.max() - row.min()) if row.max() > 0 else row, axis=1)
+    pop_pd_group = pop_pd_group.round(4)
+    pd_pop_dict = pop_pd_group.stack().to_dict()
+
+    with open(pop_dict_path, 'wb') as f:
+        pickle.dump(pd_pop_dict, f)
+    print(f"pop_dict saved to {pop_dict_path}")
+
     df_pop = count_per_group.apply(lambda row: row.tolist(), axis=1)
     df_pop = df_pop.reset_index(name='pop_history')
+    print("df_pop", df_pop)
 
     first_df = df.drop_duplicates(subset='item_encoded', keep='first')
     first_df = first_df[['item_encoded', 'release_time', 'average_rating', 'cat_encoded', 'store_encoded']]
@@ -83,7 +94,7 @@ def load_df(config):
         num_cats = df['cat_encoded'].max() + 1
         num_stores = df['store_encoded'].max() + 1
 
-        train_df, valid_df, test_df, max_time = preprocess_df(df, config)
+        train_df, valid_df, test_df, max_time = preprocess_df(df, config.pop_dict_path)
         combined_df = pd.concat([train_df, valid_df, test_df])
         if not os.path.exists(config.processed_path):
             os.makedirs(config.processed_path)
