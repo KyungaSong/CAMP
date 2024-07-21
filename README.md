@@ -4,7 +4,7 @@
 
 ### Amazon 2014 Dataset
 
-1. Go to the [Amazon 2014 dataset](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html){:target="_blank"} link.
+1. Go to the <a href="https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html" target="_blank">Amazon 2014 dataset</a> link.
 2. Download the reviews and metadata files from the **Per-category files** section.
 3. Save the downloaded files under the `dataset/dataset_name` directory.
 
