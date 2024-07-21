@@ -6,15 +6,19 @@ from collections import defaultdict
 from tqdm import tqdm
 import multiprocessing as mp
 
-def train(model, data_loader, optimizer, device):
+def train(method, model, data_loader, optimizer, device):
     model.train()
     total_loss = 0
 
     for batch in tqdm(data_loader, desc="Training"):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
-        
-        loss, _ = model(batch, device)
+
+        if method == 'CAMP':
+            loss, _ = model(batch, device)
+        elif method == 'PD':
+            loss, _ = model('train', batch, device)
+
         loss = loss.mean()        
         loss.backward()
         optimizer.step()
@@ -25,7 +29,7 @@ def train(model, data_loader, optimizer, device):
     return average_loss
 
 # 3) Evaluating
-def evaluate(model, data_loader, device):
+def evaluate(method, model, data_loader, device):
     model.eval()
     total_loss = 0
 
@@ -33,7 +37,10 @@ def evaluate(model, data_loader, device):
         for batch in tqdm(data_loader, desc="Evaluating"):
             batch = {k: v.to(device) for k, v in batch.items()}
 
-            loss, _ = model(batch, device)
+            if method == 'CAMP':
+                loss, _ = model(batch, device)
+            elif method == 'PD':
+                loss, _ = model('eval', batch, device)
             loss = loss.mean()
             total_loss += loss.item()
 
@@ -80,7 +87,7 @@ def calculate_metrics_for_user(user_predictions, user_labels, user_items, k_list
         }
     return user_metrics
 
-def test(model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
+def test(method, model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs for testing")
         model = nn.DataParallel(model)
@@ -98,10 +105,12 @@ def test(model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
     with torch.no_grad():
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
+            if method == 'CAMP':
+                batch['con_his'] *= inv_ratio
+                loss, y_int = model(batch, device)
+            elif method == 'PD':
+                loss, y_int = model('test', batch, device)
 
-            batch['con_his'] *= inv_ratio
-                
-            loss, y_int = model(batch, device)
             loss = loss.mean()
             total_loss += loss.item()
 

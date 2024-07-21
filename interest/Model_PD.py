@@ -144,12 +144,10 @@ def compute_discrepancy_loss(a, b, discrepancy_loss_weight):
     return discrepancy_loss
 
 class InterestFusionModule(nn.Module):
-    def __init__(self, combined_dim, hidden_dim, output_dim, dropout_rate, wo_con, wo_qlt):
+    def __init__(self, combined_dim, hidden_dim, output_dim, dropout_rate):
         super(InterestFusionModule, self).__init__()
         self.combined_dim = combined_dim
         self.hidden_dim = hidden_dim
-        self.wo_con = wo_con
-        self.wo_qlt = wo_qlt
         self.gru = nn.GRU(self.combined_dim, hidden_dim, batch_first=True)
         
         input_dim_for_alpha = hidden_dim + 2 * combined_dim  
@@ -171,7 +169,7 @@ class InterestFusionModule(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, combined_his_embeds, z_l, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds):
+    def forward(self, combined_his_embeds, z_l, z_s, item_embeds, cat_embeds):
         # Long-term history feature extraction
         h_l, _ = self.gru(combined_his_embeds)
         h_l = h_l[:, -1, :]
@@ -181,14 +179,7 @@ class InterestFusionModule(nn.Module):
         z_t = alpha * z_l + (1 - alpha) * z_s
 
         # Concatenate the embeddings for prediction
-        if self.wo_con and self.wo_qlt:
-            combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds), dim=1)
-        elif self.wo_con:
-            combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds, qlt_embeds), dim=1)
-        elif self.wo_qlt:
-            combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds, con_embeds), dim=1)
-        else:            
-            combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds, con_embeds, qlt_embeds), dim=1)
+        combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds), dim=1)
         y_int = self.mlp_pred(combined_embeddings)
         return y_int
 
@@ -200,59 +191,43 @@ class BCELossModule(nn.Module):
     def forward(self, y_pred, y_true):
         return self.loss_fn(y_pred, y_true)
 
-class CAMP(nn.Module):
+class PD(nn.Module):
     def __init__(self, num_users, num_items, num_cats, config):
-        super(CAMP, self).__init__()
+        super(PD, self).__init__()
         self.config = config
         self.user_embedding = nn.Embedding(num_users, config.embedding_dim)
         self.item_embedding = nn.Embedding(num_items, config.embedding_dim, padding_idx=0)
         self.cat_embedding = nn.Embedding(num_cats, config.embedding_dim, padding_idx=0)
-        self.con_transform = nn.Linear(1, config.embedding_dim)
-        self.qlt_transform = nn.Linear(1, config.embedding_dim)
-        if config.wo_con and config.wo_qlt:
-            self.combined_dim = 2 * config.embedding_dim
-        elif config.wo_con or config.wo_qlt:
-            self.combined_dim = 3 * config.embedding_dim
-        else:
-            self.combined_dim = 4 * config.embedding_dim
+        self.combined_dim = 2 * config.embedding_dim
+
         self.long_term_module = LongTermInterestModule(self.combined_dim, config.embedding_dim, config.dropout_rate)        
         self.short_term_module = ShortTermInterestModule(self.combined_dim, config.embedding_dim, config.hidden_dim, config.dropout_rate)
-        self.interest_fusion_module = InterestFusionModule(self.combined_dim, config.hidden_dim, config.output_dim, config.dropout_rate, config.wo_con, config.wo_qlt)
+        self.interest_fusion_module = InterestFusionModule(self.combined_dim, config.hidden_dim, config.output_dim, config.dropout_rate)
         self.bce_loss_module = BCELossModule(pos_weight=torch.tensor([4.0]))
         self.regularization_weight = config.regularization_weight
         self.discrepancy_loss_weight = config.discrepancy_loss_weight
 
-    def forward(self, batch, device):
+        with open(config.pop_dict_path, 'rb') as f:
+            self.pd_pop_dict = pickle.load(f)
+        self.PD_gamma = config.PD_gamma
+
+    def forward(self, stage, batch, device):
         user_ids = batch['user']
         item_ids = batch['item']
         cat_ids = batch['cat']
-        con = batch['con']
-        qlt = batch['qlt']
+        unit_time = batch['unit_time']
         items_history_padded = batch['item_his']
         cats_history_padded = batch['cat_his']
-        con_his = batch['con_his']
-        qlt_his = batch['qlt_his']
-        labels = batch['label'].float()
+        labels = batch['label'].float()        
 
         user_embeds = self.user_embedding(user_ids)
         item_embeds = self.item_embedding(item_ids)
         cat_embeds = self.cat_embedding(cat_ids)
-        con_embeds = self.con_transform(con.unsqueeze(-1))
-        qlt_embeds = self.qlt_transform(qlt.unsqueeze(-1))
 
         item_his_embeds = self.item_embedding(items_history_padded)
-        cat_his_embeds = self.cat_embedding(cats_history_padded)
-        con_his_embeds = self.con_transform(con_his.unsqueeze(-1))
-        qlt_his_embeds = self.qlt_transform(qlt_his.unsqueeze(-1))         
+        cat_his_embeds = self.cat_embedding(cats_history_padded)        
 
-        if self.config.wo_con and self.config.wo_qlt:
-            combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
-        elif self.config.wo_con:
-            combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, qlt_his_embeds), dim=-1)
-        elif self.config.wo_qlt:
-            combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds), dim=-1)
-        else:            
-            combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds, con_his_embeds, qlt_his_embeds), dim=-1)
+        combined_his_embeds = torch.cat((item_his_embeds, cat_his_embeds), dim=-1)
 
         z_l = self.long_term_module(combined_his_embeds, user_embeds)
         z_s = self.short_term_module(combined_his_embeds, user_embeds)
@@ -261,10 +236,17 @@ class CAMP(nn.Module):
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
         loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
 
-        y_int = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds, con_embeds, qlt_embeds)
+        y_int = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds)
         labels = labels.view(-1, 1)
+
+        if stage in ['train', 'eval']:
+            batch_size = user_ids.size(0)
+            pd_popularity = torch.tensor([self.pd_pop_dict[(item_ids[i].item(), unit_time[i].item())] for i in range(batch_size)], device=device).view(-1, 1)
+            y_int = (F.elu(y_int) + 1) * (pd_popularity ** self.PD_gamma)
+
         loss_bce = self.bce_loss_module(y_int, labels)
         loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_loss_weight)
         regularization_loss = self.regularization_weight * sum(torch.norm(param) for param in self.parameters())
         loss = loss_con + loss_bce + loss_discrepancy + regularization_loss
         return loss, y_int
+

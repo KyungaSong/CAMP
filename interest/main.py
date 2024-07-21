@@ -13,6 +13,7 @@ from torch.optim.lr_scheduler import StepLR
 from config import Config
 from preprocess import load_df, create_dataloader
 from Model import CAMP
+from Model_PD import PD
 from training_utils import train, evaluate, test, EarlyStopping
 
 random.seed(2024) 
@@ -38,6 +39,8 @@ parser.add_argument("--output_dim", type=int, default=1,
 
 parser.add_argument("--gamma", type=float, default=0.95,
                     help="discount factor")
+parser.add_argument("--PD_gamma", type=float, default=0.02,
+                    help="smoothing factor of PD popularity")
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
@@ -46,6 +49,8 @@ parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01,
 parser.add_argument('--regularization_weight', type=float, default=0.0001, 
                     help='weight for L2 regularization applied to model parameters')
 
+parser.add_argument("--method", type=str, default='CAMP',
+                    help="method name(CAMP, TIDE, MACR, DICE, PD)")
 parser.add_argument("--dataset", type=str, default='14_Toys',
                     help="dataset file name")
 parser.add_argument("--data_type", type=str, default='unif',
@@ -65,14 +70,14 @@ parser.add_argument('--cuda_device', type=str, help='CUDA device to use')
 args = parser.parse_args()
 config = Config(args=args)
 
-def setup_logging(dataset_name, data_type, option):
+def setup_logging(method, dataset_name, data_type, option):
     log_dir = os.path.abspath('./log')
     dataset_log_dir = os.path.join(log_dir, dataset_name)
     if not os.path.exists(dataset_log_dir):
         os.makedirs(dataset_log_dir)
 
     current_date = datetime.now().strftime('%Y-%m-%d')
-    log_file = os.path.join(dataset_log_dir, f'{current_date}_{data_type}{option}.txt')
+    log_file = os.path.join(dataset_log_dir, f'{current_date}_{method}_{data_type}{option}.txt')
     logging.basicConfig(filename=log_file, level=logging.DEBUG,
                         format='%(asctime)s:%(levelname)s:%(message)s',
                         datefmt='%Y-%m-%d')
@@ -100,7 +105,7 @@ def main():
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = '0'
         
-    setup_logging(config.dataset, config.data_type, option)
+    setup_logging(config.method, config.dataset, config.data_type, option)
         
     print(f"Data preprocessing for dataset {config.dataset}......")
     train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config)
@@ -130,7 +135,7 @@ def main():
             learning_rates = [0.001, 0.0005, 0.0001]
             batch_sizes = [64, 128]
             embedding_dims = [64, 128]
-    elif config.dataset == '14_Toys':
+    elif config.dataset == 'Toys_and_Games':
         if config.data_type == "unif":      
             learning_rates = [0.0005] 
             batch_sizes = [64]
@@ -164,15 +169,17 @@ def main():
             config.lr = lr
             config.batch_size = batch_size
             config.embedding_dim = embedding_dim                      
-
-            model = CAMP(num_users, num_items, num_cats, config).to(device)
+            if config.method == 'CAMP':
+                model = CAMP(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'PD':
+                model = PD(num_users, num_items, num_cats, config).to(device)
             optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=1e-5)
             scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
             early_stopping = EarlyStopping(patience=10, verbose=True)
 
             for epoch in range(config.num_epochs):
-                train_loss = train(model, train_loader, optimizer, device)                            
-                valid_loss = evaluate(model, valid_loader, device)
+                train_loss = train(config.method, model, train_loader, optimizer, device)                            
+                valid_loss = evaluate(config.method, model, valid_loader, device)
                 scheduler.step()
 
                 logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
@@ -197,16 +204,16 @@ def main():
             #         inv_ratio = 0.4
             #     elif config.data_type == "reg":
             #         inv_ratio = 0.2
-            if option in ['_wo_con', '_wo_both']:
+            if option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
                 inv_ratio = 1
-                average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[20])
+                average_loss, results = test(config.method, model, test_loader, device, inv_ratio, k_list=[20])
                 for k, metrics in results.items():
-                    logging.info(f"{inv_ratio:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+                    logging.info(f"{inv_ratio:.1f} [Test] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             else:
                 for inv_ratio in np.linspace(0, 1, 11):
-                    average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[20])
+                    average_loss, results = test(config.method, model, test_loader, device, inv_ratio, k_list=[20])
                     for k, metrics in results.items():
-                        logging.info(f"{inv_ratio:.1f} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+                        logging.info(f"{inv_ratio:.1f} [Test] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             
             # Clear memory and cache after each run
             del model, optimizer, scheduler, early_stopping
@@ -216,10 +223,13 @@ def main():
             print(f"Best Model Parameters: {best_model_params}")
             logging.info(f"Best Model Parameters: {best_model_params}")
             date_str = datetime.now().strftime('%y%m%d')
-            config.embedding_dim = best_model_params['embedding_dim']
-            model = CAMP(num_users, num_items, num_cats, config).to(device)
+            config.embedding_dim = best_model_params['embedding_dim']            
+            if config.method == 'CAMP':
+                model = CAMP(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'PD':
+                model = PD(num_users, num_items, num_cats, config).to(device)
             model.load_state_dict(best_model)    
-            final_save_path = f'{config.model_save_path}{date_str}_best_model_{config.data_type}{option}.pt'
+            final_save_path = f'{config.model_save_path}{date_str}_best_model_{config.method}_{config.data_type}{option}.pt'
             if not os.path.exists(os.path.dirname(config.model_save_path)):
                 os.makedirs(os.path.dirname(config.model_save_path))
             torch.save({
@@ -239,16 +249,25 @@ def main():
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             config.embedding_dim = checkpoint['embedding_dim']
-            model = CAMP(num_users, num_items, num_cats, config).to(device)
+            if config.method == 'CAMP':
+                model = CAMP(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'PD':
+                model = PD(num_users, num_items, num_cats, config).to(device)
             model.load_state_dict(checkpoint['model_state_dict'])
             print(f"Loaded model from {model_path}")
         else:
             raise FileNotFoundError(f"No model found at {model_path}")
         
-        for inv_ratio in np.linspace(0, 1, 11):
-            average_loss, results = test(model, test_loader, device, inv_ratio, k_list=[5, 10, 20])
+        if option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
+            inv_ratio = 1
+            average_loss, results = test(config.method, model, test_loader, device, inv_ratio, k_list=[20])
             for k, metrics in results.items():
-                logging.info(f"{inv_ratio} [Test only] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+                logging.info(f"{inv_ratio:.1f} [Test] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
+        else:
+            for inv_ratio in np.linspace(0, 1, 11):
+                average_loss, results = test(config.method, model, test_loader, device, inv_ratio, k_list=[5, 10, 20])
+                for k, metrics in results.items():
+                    logging.info(f"{inv_ratio} [Test] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
 
 if __name__ == "__main__":
     main()

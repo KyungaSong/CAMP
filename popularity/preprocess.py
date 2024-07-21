@@ -42,6 +42,7 @@ def preprocess_df(df, pop_dict_path):
     pop_pd_group = pop_pd_group.round(4)
     pd_pop_dict = pop_pd_group.stack().to_dict()
 
+    os.makedirs(os.path.dirname(pop_dict_path), exist_ok=True)
     with open(pop_dict_path, 'wb') as f:
         pickle.dump(pd_pop_dict, f)
     print(f"pop_dict saved to {pop_dict_path}")

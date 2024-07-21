@@ -10,12 +10,14 @@ class Config(object):
         self.output_dim = args.output_dim
 
         self.gamma = args.gamma
+        self.PD_gamma = args.PD_gamma
         self.k = args.k
 
         self.train_num_samples = 4
         self.valid_num_samples = 4
         self.test_num_samples = 99
 
+        self.method = args.method
         self.dataset = args.dataset
         self.data_type = args.data_type
         self.df_preprocessed = args.df_preprocessed
@@ -32,7 +34,8 @@ class Config(object):
         self.review_file_path = f'{self.dataset_path}{self.dataset}.pkl'
         self.pop_file_path = f'{self.dataset_path}pop_{self.dataset}.pkl'
 
-        self.processed_path = f'{self.dataset_path}preprocessed/'        
+        self.processed_path = f'{self.dataset_path}preprocessed/'   
+        self.pop_dict_path = f'{self.processed_path}pd_pop_dict.pkl'     
         self.split_path = f'{self.processed_path}split_df_{self.data_type}.txt'
 
         self.pos_train_path = f'{self.processed_path}pos_train_df_{self.data_type}.txt'

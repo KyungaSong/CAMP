@@ -4,8 +4,6 @@ import pandas as pd
 import numpy as np
 import pickle
 import gc
-import ast
-from dateutil.relativedelta import relativedelta
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -231,7 +229,7 @@ def preprocess_df(config):
 
     df = df.sort_values(by=['user_encoded', 'timestamp'])
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
-    pop_dict = create_pop_dict(df_pop)    
+    pop_dict = create_pop_dict(df_pop)
     
     split_data(df, config.data_type, config.split_path)
     save_pos_sample(config.split_path, pop_dict, config.pos_train_path, config.pos_valid_path, config.pos_test_path)
@@ -288,6 +286,7 @@ class LazyDataset(Dataset):
         cat = torch.tensor(self.df['cat_encoded'].iloc[idx], dtype=torch.long)
         con = torch.tensor(self.df['conformity'].iloc[idx], dtype=torch.float)
         qlt = torch.tensor(self.df['quality'].iloc[idx], dtype=torch.float)
+        unit_time = torch.tensor(self.df['unit_time'].iloc[idx], dtype=torch.long)
         item_his = torch.tensor(self.df['item_his_encoded'].iloc[idx], dtype=torch.long)
         cat_his = torch.tensor(self.df['cat_his_encoded'].iloc[idx], dtype=torch.long)
         con_his = torch.tensor(self.df['con_his'].iloc[idx], dtype=torch.float)
@@ -300,6 +299,7 @@ class LazyDataset(Dataset):
             'cat': cat,
             'con': con,
             'qlt': qlt,
+            'unit_time': unit_time,
             'item_his': item_his,
             'cat_his': cat_his,
             'con_his': con_his,
