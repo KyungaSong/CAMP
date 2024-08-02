@@ -35,7 +35,7 @@ parser.add_argument("--batch_size", type=int, default=16,
                     help="batch size for training")
 parser.add_argument("--lr", type=float, default=0.001,
                     help="learning rate")
-parser.add_argument("--num_epochs", type=int, default=30,
+parser.add_argument("--num_epochs", type=int, default=200,
                     help="training epochs")
 parser.add_argument("--dataset", type=str, default='14_Sports',
                     help="dataset file name")
@@ -116,6 +116,9 @@ def main():
     lr_values = [0.001, 0.005, 0.01]  # Learning rates to try
     batch_size_values = [32, 64]  # Batch sizes to try
     embedding_dim_values = [64, 128]  # Embedding dimensions to try
+    # lr_values = [0.01]  # Learning rates to try
+    # batch_size_values = [32]  # Batch sizes to try
+    # embedding_dim_values = [768]  # Embedding dimensions to try
 
     # # Toys_and_Games
     # lr: 0.001, batch_size: 16, embedding_dim: 64
@@ -133,7 +136,7 @@ def main():
         config.embedding_dim = embedding_dim
         
         model = PopPredict(config, num_items, num_cats, num_stores, max_time).to(device)
-        optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=0.0001)
+        optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=1e-5)
         scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
         early_stopping = EarlyStopping(patience=10, verbose=True)
         
@@ -149,7 +152,7 @@ def main():
             if valid_loss < best_loss:
                 logging.info(f'Best model is changed in epoch {epoch+1}')
                 best_loss = valid_loss
-                best_model_params = {'lr': config.lr, 'batch_size': config.batch_size, 'embedding_dim': config.embedding_dim, 'epoch': epoch}
+                best_model_params = {'lr': config.lr, 'batch_size': config.batch_size, 'embedding_dim': config.embedding_dim, 'epoch': epoch + 1}
                 best_model = model.state_dict()
             
             early_stopping(valid_loss)
@@ -195,7 +198,7 @@ def main():
     results_df['quality'] = results_df['weighted_sideinfo_output'].apply(lambda x: x[0])
     results_df = results_df[['item_encoded', 'unit_time', 'time_output', 'conformity', 'quality']]
 
-    result_path = f'{config.dataset_path}/pop_{config.dataset}.pkl'
+    result_path = f'{config.dataset_path}pop_{config.dataset}.pkl'
     results_df.to_pickle(result_path)
     print(f"Results saved to {result_path}")
 

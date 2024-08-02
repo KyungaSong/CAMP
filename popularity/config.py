@@ -24,7 +24,8 @@ class Config(object):
         self.pop_train_path = f'{self.processed_path}train_df_pop.pkl'
         self.pop_valid_path = f'{self.processed_path}valid_df_pop.pkl'
         self.pop_test_path = f'{self.processed_path}test_df_pop.pkl'
-        self.pop_dict_path = f'{self.processed_path}pd_pop_dict.pkl'
+        self.dice_pop_path = f'{self.processed_path}dice_pop_dict.pkl' 
+        self.pd_pop_path = f'{self.processed_path}pd_pop_dict.pkl'
 
         self.cuda_device = args.cuda_device
         
