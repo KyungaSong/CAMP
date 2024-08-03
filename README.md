@@ -4,7 +4,7 @@
 
 ### Amazon 2014 Dataset
 
-1. Go to the <a href="https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html" target="_blank">Amazon 2014 dataset</a> link.
+1. Go to the [Amazon 2014 dataset](https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html) link.
 2. Download the reviews and metadata files from the **Per-category files** section.
 3. Save the downloaded files under the `dataset/dataset_name` directory.
 
@@ -44,8 +44,8 @@ python main.py --dataset Toys_and_Games
 - `--output_dim`: Size of the output layer embeddings
 - `--gamma`: Discount factor
 - `--k`: Value of k for evaluation metrics
-- `--discrepancy_loss_weight`: Loss weight for discrepancy between long and short term user embedding
-- `--regularization_weight`: Weight for L2 regularization applied to model parameters
+- `--discrepancy_weight`: Loss weight for discrepancy between long and short term user embedding
+- `--reg_weight`: Weight for L2 regularization applied to model parameters
 - `--wo_con`: Flag to indicate if model has no conformity module
 - `--wo_qlt`: Flag to indicate if model has no quality module
 - `--dataset`: Dataset file name
@@ -60,6 +60,7 @@ python main.py --dataset Toys_and_Games
 python main.py --dataset Toys_and_Games --data_type unif
 ```
 
-### Important Note
+## 3. Important Note
 - The `interest` module should be executed after the `popularity` module to ensure proper training.
-
+- The `interest` module was developed with reference to [CLSR](https://github.com/tsinghua-fib-lab/CLSR).
+- The `popularity` module was developed based on the [PARE](https://github.com/JingXiaoyi/PARE) base code.

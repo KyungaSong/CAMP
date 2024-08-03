@@ -6,7 +6,8 @@ from collections import defaultdict
 from tqdm import tqdm
 import multiprocessing as mp
 
-def train(method, model, data_loader, optimizer, device):
+# 1) Training
+def train(model, data_loader, optimizer, device, config):
     model.train()
     total_loss = 0
 
@@ -14,10 +15,14 @@ def train(method, model, data_loader, optimizer, device):
         batch = {k: v.to(device) for k, v in batch.items()}
         optimizer.zero_grad()
 
-        if method == 'CAMP':
-            loss, _ = model(batch, device)
-        elif method == 'PD':
+        if config.method == 'DICE':
+            loss, _, _ = model(batch, device) 
+        elif config.method == 'PD':
             loss, _ = model('train', batch, device)
+        elif config.method == 'MACR':
+            loss, _, _, _, _ = model(batch, device)
+        else:
+            loss, _ = model(batch, device)
 
         loss = loss.mean()        
         loss.backward()
@@ -26,10 +31,14 @@ def train(method, model, data_loader, optimizer, device):
 
     average_loss = total_loss / len(data_loader)
     print(f"Average Training Loss: {average_loss:.4f}")
+
+    # Adapt weights after each epoch
+    if config.method == 'DICE':
+        model.adapt(epoch=0, decay=config.loss_decay) 
     return average_loss
 
-# 3) Evaluating
-def evaluate(method, model, data_loader, device):
+# 2) Evaluating
+def evaluate(model, data_loader, device, config):
     model.eval()
     total_loss = 0
 
@@ -37,10 +46,15 @@ def evaluate(method, model, data_loader, device):
         for batch in tqdm(data_loader, desc="Evaluating"):
             batch = {k: v.to(device) for k, v in batch.items()}
 
-            if method == 'CAMP':
-                loss, _ = model(batch, device)
-            elif method == 'PD':
+            if config.method == 'DICE':
+                loss, _, _ = model(batch, device)
+            elif config.method == 'PD':
                 loss, _ = model('eval', batch, device)
+            elif config.method == 'MACR':
+                loss, _, _, _, _ = model(batch, device)
+            else:
+                loss, _ = model(batch, device)
+                
             loss = loss.mean()
             total_loss += loss.item()
 
@@ -48,7 +62,7 @@ def evaluate(method, model, data_loader, device):
     print(f"Average Validation Loss: {average_loss:.4f}")
     return average_loss
 
-# 4) Testing
+# 3) Testing
 def calculate_metrics_for_user(user_predictions, user_labels, user_items, k_list):
     user_metrics = {k: {} for k in k_list}
     sorted_indices = np.argsort(user_predictions)[::-1]
@@ -87,7 +101,7 @@ def calculate_metrics_for_user(user_predictions, user_labels, user_items, k_list
         }
     return user_metrics
 
-def test(method, model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
+def test(model, data_loader, device, config, inv_ratio, k_list=[5, 10, 20]):
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs for testing")
         model = nn.DataParallel(model)
@@ -103,27 +117,37 @@ def test(method, model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
     all_item_ids = []
 
     with torch.no_grad():
+        if config.method == 'MACR':
+            mean_user_embed = model.user_embedding.weight.mean(dim=0, keepdim=True)
+            mean_item_embed = model.item_embedding.weight.mean(dim=0, keepdim=True)
+            mean_cat_embed = model.cat_embedding.weight.mean(dim=0, keepdim=True)
+
+            mean_combined_his_embeds = torch.cat((mean_item_embed, mean_cat_embed), dim=-1).unsqueeze(0)  
+            mean_z_l = model.long_term_module(mean_combined_his_embeds, mean_user_embed)
+            mean_z_s = model.short_term_module(mean_combined_his_embeds, mean_user_embed)
+            c = model.interest_fusion_module(mean_combined_his_embeds, mean_z_l, mean_z_s, mean_item_embed, mean_cat_embed)
+
         for batch in tqdm(data_loader, desc="Testing"):
             batch = {k: v.to(device) for k, v in batch.items()}
-            if method == 'CAMP':
+            if config.method == 'CAMP':
                 batch['con_his'] *= inv_ratio
-                loss, y_int = model(batch, device)
-            elif method == 'PD':
-                loss, y_int = model('test', batch, device)
+                loss, y_pred = model(batch, device)
+            if config.method == 'MACR':
+                loss, y_pred, y_k, y_i, y_u = model(batch, device)
+                y_pred = y_pred - c * torch.sigmoid(y_i) * torch.sigmoid(y_u)
+            elif config.method == 'PD':
+                loss, y_pred = model('test', batch, device)
 
             loss = loss.mean()
             total_loss += loss.item()
 
             user_ids = batch['user']
-            y_int = y_int.view(-1)  # Flatten y_int for easier processing
+            y_pred = y_pred.view(-1)  
 
-            # Collect all predictions, labels, user_ids and item_ids
-            all_predictions.extend(y_int.cpu().numpy())
+            all_predictions.extend(y_pred.cpu().numpy())
             all_labels.extend(batch['label'].cpu().numpy())
             all_user_ids.extend(user_ids.cpu().numpy())
             all_item_ids.extend(batch['item'].cpu().numpy())
-
-    # Group predictions, labels, and items by user
     
     predictions_by_user = defaultdict(list)
     labels_by_user = defaultdict(list)
@@ -136,7 +160,6 @@ def test(method, model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
 
     user_ids = list(predictions_by_user.keys())
 
-    # Use a context manager to automatically manage the pool
     with mp.Pool(mp.cpu_count()) as pool:
         results = pool.starmap(calculate_metrics_for_user, 
                                [(predictions_by_user[user_id], 
@@ -144,7 +167,92 @@ def test(method, model, data_loader, device, inv_ratio, k_list=[5, 10, 20]):
                                  items_by_user[user_id], 
                                  k_list) for user_id in user_ids])
 
-    # Aggregate results
+    for result in results:
+        for k in k_list:
+            metrics[k]['precision_scores'].append(result[k]['precision'])
+            metrics[k]['recall_scores'].append(result[k]['recall'])
+            metrics[k]['ndcg_scores'].append(result[k]['ndcg'])
+            metrics[k]['hit_rates'].append(result[k]['hit_rate'])
+            metrics[k]['auc_scores'].append(result[k]['auc'])
+            metrics[k]['mrr_scores'].append(result[k]['mrr'])
+
+    average_loss = total_loss / len(data_loader)
+    final_results = {}
+    for k in k_list:
+        avg_precision = np.mean(metrics[k]['precision_scores'])
+        avg_recall = np.mean(metrics[k]['recall_scores'])
+        avg_ndcg = np.mean(metrics[k]['ndcg_scores'])
+        avg_hit_rate = np.mean(metrics[k]['hit_rates'])
+        avg_auc = np.mean(metrics[k]['auc_scores'])
+        avg_mrr = np.mean(metrics[k]['mrr_scores'])
+
+        final_results[k] = {
+            'Precision': avg_precision,
+            'Recall': avg_recall,
+            'NDCG': avg_ndcg,
+            'Hit Rate': avg_hit_rate,
+            'AUC': avg_auc,
+            'MRR': avg_mrr
+        }
+        print(f"Metrics for k={k}:")
+        print(f"Precision@{k}: {avg_precision:.4f}, Recall@{k}: {avg_recall:.4f}, NDCG@{k}: {avg_ndcg:.4f}, Hit Rate@{k}: {avg_hit_rate:.4f}")
+        print(f"AUC: {avg_auc:.4f}, MRR: {avg_mrr:.4f}")
+
+    return average_loss, final_results
+
+def test_DICE(model, data_loader, device, config, k_list=[5, 10, 20]):
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs for testing")
+        model = nn.DataParallel(model)
+
+    model.to(device)
+    model.eval()
+    total_loss = 0
+    metrics = {k: {'precision_scores': [], 'recall_scores': [], 'ndcg_scores': [], 'hit_rates': [], 'auc_scores': [], 'mrr_scores': []} for k in k_list}
+
+    all_predictions = []
+    all_labels = []
+    all_user_ids = []
+    all_item_ids = []
+
+    with torch.no_grad():
+        for batch in tqdm(data_loader, desc="Testing DICE"):
+            batch = {k: v.to(device) for k, v in batch.items()}
+
+            loss, pos_y_pred, neg_y_pred = model(batch, device)
+            loss = loss.mean()
+            total_loss += loss.item()
+
+            pos_y_pred = pos_y_pred.view(-1, config.test_num_samples)[:, 0].unsqueeze(1)  # (batch_size, 1)
+            neg_y_pred = neg_y_pred.view(-1, config.test_num_samples)  # (batch_size, test_num_samples)
+            
+            y_pred = torch.cat([pos_y_pred, neg_y_pred], dim=1)  # (batch_size, 1 + test_num_samples)
+            
+            labels = torch.cat([torch.ones_like(pos_y_pred), torch.zeros_like(neg_y_pred)], dim=1)  # (batch_size, 1 + test_num_samples)
+
+            all_predictions.extend(y_pred.cpu().numpy().reshape(-1))
+            all_labels.extend(labels.cpu().numpy().reshape(-1))
+            all_user_ids.extend(batch['user'].cpu().numpy().repeat(1 + config.test_num_samples))
+            all_item_ids.extend(torch.cat([batch['pos_item'].view(-1, 1), batch['neg_item'].view(-1, config.test_num_samples)], dim=1).cpu().numpy().reshape(-1))
+
+    predictions_by_user = defaultdict(list)
+    labels_by_user = defaultdict(list)
+    items_by_user = defaultdict(list)
+
+    for pred, label, user_id, item_id in zip(all_predictions, all_labels, all_user_ids, all_item_ids):
+        predictions_by_user[user_id].append(pred)
+        labels_by_user[user_id].append(label)
+        items_by_user[user_id].append(item_id)
+
+    user_ids = list(predictions_by_user.keys())
+
+    with mp.Pool(mp.cpu_count()) as pool:
+        results = pool.starmap(calculate_metrics_for_user, 
+                               [(predictions_by_user[user_id], 
+                                 labels_by_user[user_id], 
+                                 items_by_user[user_id], 
+                                 k_list) for user_id in user_ids])
+
     for result in results:
         for k in k_list:
             metrics[k]['precision_scores'].append(result[k]['precision'])

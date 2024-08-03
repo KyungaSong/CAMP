@@ -135,12 +135,12 @@ def calculate_contrastive_loss(z_l, z_s, p_l, p_s):
 
     return L_con
 
-def compute_discrepancy_loss(a, b, discrepancy_loss_weight):
+def compute_discrepancy_loss(a, b, discrepancy_weight):
     """
     Calculate the discrepancy loss between two embeddings a and b.
     """
     discrepancy_loss = F.mse_loss(a, b)
-    discrepancy_loss = discrepancy_loss_weight * discrepancy_loss
+    discrepancy_loss = discrepancy_weight * discrepancy_loss
     return discrepancy_loss
 
 class InterestFusionModule(nn.Module):
@@ -180,8 +180,8 @@ class InterestFusionModule(nn.Module):
 
         # Concatenate the embeddings for prediction
         combined_embeddings = torch.cat((z_t, item_embeds, cat_embeds), dim=1)
-        y_int = self.mlp_pred(combined_embeddings)
-        return y_int
+        y_pred = self.mlp_pred(combined_embeddings)
+        return y_pred
 
 class BCELossModule(nn.Module):
     def __init__(self, pos_weight):
@@ -204,10 +204,10 @@ class PD(nn.Module):
         self.short_term_module = ShortTermInterestModule(self.combined_dim, config.embedding_dim, config.hidden_dim, config.dropout_rate)
         self.interest_fusion_module = InterestFusionModule(self.combined_dim, config.hidden_dim, config.output_dim, config.dropout_rate)
         self.bce_loss_module = BCELossModule(pos_weight=torch.tensor([4.0]))
-        self.regularization_weight = config.regularization_weight
-        self.discrepancy_loss_weight = config.discrepancy_loss_weight
+        self.reg_weight = config.reg_weight
+        self.discrepancy_weight = config.discrepancy_weight
 
-        with open(config.pop_dict_path, 'rb') as f:
+        with open(config.pd_pop_path, 'rb') as f:
             self.pd_pop_dict = pickle.load(f)
         self.PD_gamma = config.PD_gamma
 
@@ -236,17 +236,17 @@ class PD(nn.Module):
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
         loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
 
-        y_int = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds)
+        y_pred = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds)
         labels = labels.view(-1, 1)
 
         if stage in ['train', 'eval']:
             batch_size = user_ids.size(0)
             pd_popularity = torch.tensor([self.pd_pop_dict[(item_ids[i].item(), unit_time[i].item())] for i in range(batch_size)], device=device).view(-1, 1)
-            y_int = (F.elu(y_int) + 1) * (pd_popularity ** self.PD_gamma)
+            y_pred = (F.elu(y_pred) + 1) * (pd_popularity ** self.PD_gamma)
 
-        loss_bce = self.bce_loss_module(y_int, labels)
-        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_loss_weight)
-        regularization_loss = self.regularization_weight * sum(torch.norm(param) for param in self.parameters())
+        loss_bce = self.bce_loss_module(y_pred, labels)
+        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_weight)
+        regularization_loss = self.reg_weight * sum(torch.norm(param) for param in self.parameters())
         loss = loss_con + loss_bce + loss_discrepancy + regularization_loss
-        return loss, y_int
+        return loss, y_pred
 

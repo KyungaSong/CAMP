@@ -19,27 +19,24 @@ def load_file(file_path):
 
 def load_txt(file_path, max_length=128):
     column_names = [
-        'label', 'user_encoded', 'item_encoded', 'cat_encoded', 
-        'conformity', 'quality', 'unit_time',
-        'item_his_encoded', 'cat_his_encoded', 'con_his', 'qlt_his'
+        'user_enc', 'pos_item_enc', 'pos_cat_enc', 
+        'neg_item_enc', 'neg_cat_enc', 'mask', 'item_his_enc', 'cat_his_enc'
     ]
     df = pd.read_csv(file_path, delimiter='\t', names=column_names)
 
     type_conversion = {
-        'label': int,
-        'user_encoded': int,
-        'item_encoded': int,
-        'cat_encoded': int,
-        'conformity': float,
-        'quality': float,
-        'unit_time': int,
+        'user_enc': int,
+        'pos_item_enc': int,        
+        'pos_cat_enc': int,
+        'neg_item_enc': int,
+        'neg_cat_enc': int,
+        'mask': bool
     }
 
     for col, dtype in type_conversion.items():
         df[col] = df[col].astype(dtype)
 
-    int_columns = ['item_his_encoded', 'cat_his_encoded']
-    float_columns = ['con_his', 'qlt_his']
+    int_columns = ['item_his_enc', 'cat_his_enc']
 
     def pad_or_truncate(item_list, max_length):
         item_list = item_list[-max_length:] if len(item_list) > max_length else [0] * (max_length - len(item_list)) + item_list
@@ -47,8 +44,6 @@ def load_txt(file_path, max_length=128):
 
     for col in int_columns:
         df[col] = df[col].apply(lambda x: pad_or_truncate(list(map(int, x.split(','))), max_length))
-    for col in float_columns:
-        df[col] = df[col].apply(lambda x: pad_or_truncate(list(map(float, x.split(','))), max_length))
 
     return df
 
@@ -56,7 +51,7 @@ def split_data(df, data_type, split_path):
 
     num_users = df['user_encoded'].max() + 1
     max_time = df['unit_time'].max()
-    print('max_time', max_time)
+    # print('max_time', max_time)
 
     if data_type == 'reg':
         temp_df, test_df = train_test_split(df, test_size=0.14, random_state=42)
@@ -65,7 +60,7 @@ def split_data(df, data_type, split_path):
         test_size = int(len(df) * 0.2)
         max_sample_size = test_size // df['item_encoded'].nunique()
         test_df = df.groupby('item_encoded').apply(lambda x: x.sample(n=min(len(x), max_sample_size), random_state=42)).reset_index(level=0, drop=True)
-        temp_df = df.drop(test_df.index)  # MultiIndex를 제거한 후의 인덱스를 사용
+        temp_df = df.drop(test_df.index)  
         temp_df = temp_df.reset_index(drop=True) 
         train_df, valid_df = train_test_split(temp_df, test_size=0.1, random_state=42)
     elif data_type == 'seq':
@@ -145,8 +140,8 @@ def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_te
     f_valid.close()
     f_test.close()
 
-def neg_samples_for_row(all_item_ids, item_encoded, item_his_encoded_set, num_samples, item_to_cat, pop_dict, unit_time):
-    candidate_items = list(all_item_ids - item_his_encoded_set - {item_encoded})
+def neg_samples_for_row(all_item_ids, item_encoded, item_his_encoded, num_samples, item_to_cat, dice_pop_dict):
+    candidate_items = list(all_item_ids - item_his_encoded - {item_encoded})
     random.shuffle(candidate_items)
 
     neg_samples = []
@@ -155,53 +150,40 @@ def neg_samples_for_row(all_item_ids, item_encoded, item_his_encoded_set, num_sa
         if valid_sample_count >= num_samples:
             break
 
-        key = (item, unit_time)
-        if key in pop_dict:
-            pop_data = pop_dict[key]
-            conformity = pop_data['conformity']
-            quality = pop_data['quality']
-            cat_encoded = item_to_cat.get(item, 0)
-            neg_samples.append({
-                'item_encoded': item,
-                'cat_encoded': int(cat_encoded),
-                'conformity': conformity,
-                'quality': quality                
-            })
-            valid_sample_count += 1
+        cat_encoded = item_to_cat.get(item, 0)
+        mask = dice_pop_dict[item_encoded] > dice_pop_dict.get(item, 0)
+        neg_samples.append({
+            'item_encoded': item,
+            'cat_encoded': int(cat_encoded), 
+            'mask': mask,             
+        })
+        valid_sample_count += 1
     
     return neg_samples
 
-def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to_cat, pop_dict):
+def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to_cat, dice_pop_dict):
     with open(input_file, 'r') as file:
         lines = file.readlines()
 
     results = []
 
     for line in tqdm(lines, desc="Generating negative samples"):
-        # positive sample 저장
-        results.append(line.strip())
-
         parts = line.strip().split('\t')
-        item_encoded = int(parts[2])
-        unit_time = int(parts[6])
-        item_his_encoded = set(map(int, parts[7].split(',')))
+        pos_item_enc = int(parts[2])
+        item_his_set = set(map(int, parts[7].split(',')))
 
-        # negative sample 생성
-        neg_samples = neg_samples_for_row(all_item_ids, item_encoded, item_his_encoded, num_samples, item_to_cat, pop_dict, unit_time)
+        neg_samples = neg_samples_for_row(all_item_ids, pos_item_enc, item_his_set, num_samples, item_to_cat, dice_pop_dict)
         
         for neg_sample in neg_samples:
             neg_sample_line = '\t'.join([
-                '0',  # label
-                parts[1],  # user_encoded
-                str(neg_sample['item_encoded']),
+                str(parts[1]),  # user_enc
+                str(pos_item_enc), # pos_item_enc
+                str(parts[3]),  # pos_cat_enc
+                str(neg_sample['item_encoded']),  
                 str(neg_sample['cat_encoded']),
-                str(neg_sample['conformity']),
-                str(neg_sample['quality']),
-                parts[6],  # unit_time
+                str(neg_sample['mask']),
                 parts[7],  # item_his_encoded
                 parts[8],  # cat_his_encoded
-                parts[9],  # con_his
-                parts[10]   # qlt_his
             ])
             results.append(neg_sample_line)
 
@@ -230,6 +212,9 @@ def preprocess_df(config):
     df = df.sort_values(by=['user_encoded', 'timestamp'])
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
     pop_dict = create_pop_dict(df_pop)
+
+    with open(config.dice_pop_path, 'rb') as f:
+        dice_pop_dict = pickle.load(f)
     
     if not os.path.exists(config.split_path):
         split_data(df, config.data_type, config.split_path)
@@ -240,11 +225,11 @@ def preprocess_df(config):
     all_item_ids = set(range(1, max_item_id + 1))    
     
     print("Train dataset -----")
-    save_neg_samples(config.pos_train_path, config.train_path, config.train_num_samples, all_item_ids, item_to_cat, pop_dict)
+    save_neg_samples(config.pos_train_path, config.dice_train_path, config.train_num_samples, all_item_ids, item_to_cat, dice_pop_dict)
     print("Valid dataset -----")
-    save_neg_samples(config.pos_valid_path, config.valid_path, config.valid_num_samples, all_item_ids, item_to_cat, pop_dict)
+    save_neg_samples(config.pos_valid_path, config.dice_valid_path, config.valid_num_samples, all_item_ids, item_to_cat, dice_pop_dict)
     print("Test dataset -----")
-    save_neg_samples(config.pos_test_path, config.test_path, config.test_num_samples, all_item_ids, item_to_cat, pop_dict)
+    save_neg_samples(config.pos_test_path, config.dice_test_path, config.test_num_samples, all_item_ids, item_to_cat, dice_pop_dict)
     print("All samples saved successfully.")
 
     del df
@@ -259,15 +244,15 @@ def load_df(config):
         num_users, num_items, num_cats = preprocess_df(config)
         
     print("Loading txt file")
-    if os.path.exists(config.train_path) and os.path.exists(config.valid_path) and os.path.exists(config.test_path):
-        train_df = load_txt(config.train_path)
-        valid_df = load_txt(config.valid_path)
-        test_df = load_txt(config.test_path)
+    if os.path.exists(config.dice_train_path) and os.path.exists(config.dice_valid_path) and os.path.exists(config.dice_test_path):
+        train_df = load_txt(config.dice_train_path)
+        valid_df = load_txt(config.dice_valid_path)
+        test_df = load_txt(config.dice_test_path)
         
         combined_df = pd.concat([train_df, valid_df, test_df])
-        num_users = combined_df['user_encoded'].max() + 1
-        num_items = combined_df['item_encoded'].max() + 1
-        num_cats = combined_df['cat_encoded'].max() + 1
+        num_users = combined_df['user_enc'].max() + 1
+        num_items = combined_df['pos_item_enc'].max() + 1
+        num_cats = combined_df['pos_cat_enc'].max() + 1
 
         print(f'df: {len(combined_df)}, num_users: {num_users}, num_items: {num_items}, num_cats: {num_cats}') 
     else:
@@ -283,34 +268,28 @@ class LazyDataset(Dataset):
         return len(self.df)
     
     def __getitem__(self, idx):
-        user = torch.tensor(self.df['user_encoded'].iloc[idx], dtype=torch.long)
-        item = torch.tensor(self.df['item_encoded'].iloc[idx], dtype=torch.long)
-        cat = torch.tensor(self.df['cat_encoded'].iloc[idx], dtype=torch.long)
-        con = torch.tensor(self.df['conformity'].iloc[idx], dtype=torch.float)
-        qlt = torch.tensor(self.df['quality'].iloc[idx], dtype=torch.float)
-        unit_time = torch.tensor(self.df['unit_time'].iloc[idx], dtype=torch.long)
-        item_his = torch.tensor(self.df['item_his_encoded'].iloc[idx], dtype=torch.long)
-        cat_his = torch.tensor(self.df['cat_his_encoded'].iloc[idx], dtype=torch.long)
-        con_his = torch.tensor(self.df['con_his'].iloc[idx], dtype=torch.float)
-        qlt_his = torch.tensor(self.df['qlt_his'].iloc[idx], dtype=torch.float)
-        label = torch.tensor(self.df['label'].iloc[idx], dtype=torch.long)
+        user = torch.tensor(self.df['user_enc'].iloc[idx], dtype=torch.long)
+        pos_item = torch.tensor(self.df['pos_item_enc'].iloc[idx], dtype=torch.long)
+        pos_cat = torch.tensor(self.df['pos_cat_enc'].iloc[idx], dtype=torch.long)
+        neg_item = torch.tensor(self.df['neg_item_enc'].iloc[idx], dtype=torch.long)
+        neg_cat = torch.tensor(self.df['neg_cat_enc'].iloc[idx], dtype=torch.long)
+        mask = torch.tensor(self.df['mask'].iloc[idx], dtype=torch.bool)
+        item_his = torch.tensor(self.df['item_his_enc'].iloc[idx], dtype=torch.long)
+        cat_his = torch.tensor(self.df['cat_his_enc'].iloc[idx], dtype=torch.long)
         
         data = {
             'user': user,
-            'item': item,
-            'cat': cat,
-            'con': con,
-            'qlt': qlt,
-            'unit_time': unit_time,
+            'pos_item': pos_item,
+            'pos_cat': pos_cat,
+            'neg_item': neg_item,
+            'neg_cat': neg_cat,
+            'mask': mask,
             'item_his': item_his,
             'cat_his': cat_his,
-            'con_his': con_his,
-            'qlt_his': qlt_his,
-            'label': label
         }
         return data
 
-def create_dataloader(train_df, valid_df, test_df, batch_size=32, num_workers=4):
+def create_dataloader(train_df, valid_df, test_df, test_batch_size, batch_size=32, num_workers=4):
     print("making train dataset")
     train_dataset = LazyDataset(train_df)
     print("making valid dataset")
@@ -322,7 +301,7 @@ def create_dataloader(train_df, valid_df, test_df, batch_size=32, num_workers=4)
     print("creating dataloaders")
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False, num_workers=num_workers)
 
     print("create datasets and dataloaders done!")
     return train_loader, valid_loader, test_loader

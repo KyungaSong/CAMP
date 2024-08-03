@@ -23,8 +23,13 @@ class Config(object):
         self.df_preprocessed = args.df_preprocessed
         self.test_only = args.test_only
 
-        self.regularization_weight = args.regularization_weight
-        self.discrepancy_loss_weight = args.discrepancy_loss_weight
+        self.int_weight = args.int_weight
+        self.pop_weight = args.pop_weight
+        self.discrepancy_weight = args.discrepancy_weight
+        self.reg_weight = args.reg_weight
+        self.loss_decay = args.loss_decay
+        self.discrepancy_type = args.discrepancy_type
+        
 
         self.wo_con = args.wo_con
         self.wo_qlt = args.wo_qlt
@@ -35,7 +40,8 @@ class Config(object):
         self.pop_file_path = f'{self.dataset_path}pop_{self.dataset}.pkl'
 
         self.processed_path = f'{self.dataset_path}preprocessed/'   
-        self.pop_dict_path = f'{self.processed_path}pd_pop_dict.pkl'     
+        self.dice_pop_path = f'{self.processed_path}dice_pop_dict.pkl'  
+        self.pd_pop_path = f'{self.processed_path}pd_pop_dict.pkl'     
         self.split_path = f'{self.processed_path}split_df_{self.data_type}.txt'
 
         self.pos_train_path = f'{self.processed_path}pos_train_df_{self.data_type}.txt'
@@ -45,6 +51,10 @@ class Config(object):
         self.train_path = f'{self.processed_path}train_df_{self.data_type}.txt'
         self.valid_path = f'{self.processed_path}valid_df_{self.data_type}.txt'
         self.test_path = f'{self.processed_path}test_df_{self.data_type}.txt'
+
+        self.dice_train_path = f'{self.processed_path}dice_train_df_{self.data_type}.txt'
+        self.dice_valid_path = f'{self.processed_path}dice_valid_df_{self.data_type}.txt'
+        self.dice_test_path = f'{self.processed_path}dice_test_df_{self.data_type}.txt'
 
         self.cuda_device = args.cuda_device
         

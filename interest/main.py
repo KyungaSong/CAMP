@@ -12,13 +12,22 @@ from torch.optim.lr_scheduler import StepLR
 
 from config import Config
 from preprocess import load_df, create_dataloader
+import preprocess_DICE
 from Model import CAMP
 from Model_PD import PD
-from training_utils import train, evaluate, test, EarlyStopping
+from Model_DICE import DICE
+from Model_MACR import MACR
+from training_utils import train, evaluate, test, test_DICE, EarlyStopping
 
-random.seed(2024) 
-torch.manual_seed(2024)
-torch.cuda.manual_seed(2024)
+def set_seed(seed=2024):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(2024)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--lr", type=float, default=0.0005,
@@ -44,10 +53,18 @@ parser.add_argument("--PD_gamma", type=float, default=0.02,
 parser.add_argument("--k", type=int, default=20,
                     help="value of k for evaluation metrics")
 
-parser.add_argument('--discrepancy_loss_weight', type=float, default=0.01, 
-                    help='Loss weight for discrepancy between long and short term user embedding.')
-parser.add_argument('--regularization_weight', type=float, default=0.0001, 
+parser.add_argument("--int_weight", type=float, default=0.1,
+                    help="weight for balancing interest in the loss function of DICE.")
+parser.add_argument("--pop_weight", type=float, default=0.1,
+                    help="weight for balancing popularity in the loss function of DICE.")
+parser.add_argument('--discrepancy_weight', type=float, default=0.01, 
+                    help='weight for discrepancy between long and short term user embedding.')
+parser.add_argument('--reg_weight', type=float, default=0.0001, 
                     help='weight for L2 regularization applied to model parameters')
+parser.add_argument('--loss_decay', type=float, default=0.9, 
+                    help='decay of loss')
+parser.add_argument('--discrepancy_type', type=str, default='L2', 
+                    help='type of discrepancy loss')
 
 parser.add_argument("--method", type=str, default='CAMP',
                     help="method name(CAMP, TIDE, MACR, DICE, PD)")
@@ -108,21 +125,26 @@ def main():
     setup_logging(config.method, config.dataset, config.data_type, option)
         
     print(f"Data preprocessing for dataset {config.dataset}......")
-    train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config)
-
-    print("Create datasets......")
-    train_loader, valid_loader, test_loader = create_dataloader(train_df, valid_df, test_df)
+    if config.method == 'DICE':
+        train_df, valid_df, test_df, num_users, num_items, num_cats = preprocess_DICE.load_df(config)
+        train_loader, valid_loader, test_loader = preprocess_DICE.create_dataloader(train_df, valid_df, test_df, config.test_num_samples)
+    else:
+        train_df, valid_df, test_df, num_users, num_items, num_cats = load_df(config)
+        train_loader, valid_loader, test_loader = create_dataloader(train_df, valid_df, test_df)
 
     del train_df, valid_df, test_df
     torch.cuda.empty_cache()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     
-    if config.dataset == '14_Sports':
+    if config.dataset == 'Sports_and_Outdoors':
         if config.data_type == "unif":      
-            learning_rates = [0.0005] 
+            learning_rates = [0.0001] 
             batch_sizes = [128]
-            embedding_dims = [128]        
+            embedding_dims = [64]    
+            # learning_rates = [0.001, 0.0005, 0.0001]
+            # batch_sizes = [64, 128]
+            # embedding_dims = [64, 128]    
         # elif config.data_type == "seq":
         #     learning_rates = [0.001] 
         #     batch_sizes = [128]
@@ -171,15 +193,20 @@ def main():
             config.embedding_dim = embedding_dim                      
             if config.method == 'CAMP':
                 model = CAMP(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'DICE':
+                model = DICE(num_users, num_items, num_cats, config).to(device)
             elif config.method == 'PD':
                 model = PD(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'MACR':
+                model = MACR(num_users, num_items, num_cats, config).to(device)
             optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=1e-5)
             scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
             early_stopping = EarlyStopping(patience=10, verbose=True)
 
+
             for epoch in range(config.num_epochs):
-                train_loss = train(config.method, model, train_loader, optimizer, device)                            
-                valid_loss = evaluate(config.method, model, valid_loader, device)
+                train_loss = train(model, train_loader, optimizer, device, config)                            
+                valid_loss = evaluate(model, valid_loader, device, config)
                 scheduler.step()
 
                 logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
@@ -193,20 +220,11 @@ def main():
                     print("Early stopping triggered")
                     break
             
-
-            # if config.dataset == "14_Sports":
-            #     if config.data_type == "unif":
-            #         inv_ratio = 0.5
-            #     elif config.data_type == "reg":
-            #         inv_ratio = 0.5
-            # elif config.dataset == "14_Toys":
-            #     if config.data_type == "unif":
-            #         inv_ratio = 0.4
-            #     elif config.data_type == "reg":
-            #         inv_ratio = 0.2
-            if option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
+            if config.method == 'DICE':
+                average_loss, results = test_DICE(model, test_loader, device, config, k_list=[20])
+            elif option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
                 inv_ratio = 1
-                average_loss, results = test(config.method, model, test_loader, device, inv_ratio, k_list=[20])
+                average_loss, results = test(model, test_loader, device, config, inv_ratio, k_list=[20])
                 for k, metrics in results.items():
                     logging.info(f"{inv_ratio:.1f} [Test] Test Loss: {average_loss:.4f}, Pre@{k}: {metrics['Precision']:.4f}, Rec@{k}: {metrics['Recall']:.4f}, NDCG@{k}: {metrics['NDCG']:.4f}, HR@{k}: {metrics['Hit Rate']:.4f}, AUC: {metrics['AUC']:.4f}, MRR: {metrics['MRR']:.4f}")
             else:
@@ -226,8 +244,12 @@ def main():
             config.embedding_dim = best_model_params['embedding_dim']            
             if config.method == 'CAMP':
                 model = CAMP(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'DICE':
+                model = DICE(num_users, num_items, num_cats, config).to(device)
             elif config.method == 'PD':
                 model = PD(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'MACR':
+                model = MACR(num_users, num_items, num_cats, config).to(device)
             model.load_state_dict(best_model)    
             final_save_path = f'{config.model_save_path}{date_str}_best_model_{config.method}_{config.data_type}{option}.pt'
             if not os.path.exists(os.path.dirname(config.model_save_path)):
@@ -240,25 +262,32 @@ def main():
             }, final_save_path)
     else:
         date_str = input("Enter the date string of the saved model (format: yymmdd): ")
+        input_method = input("Enter the method of the saved model (format: CAMP, DICE, PD, MACR, TIDE): ")
         input_data_type = input("Enter the data type of the saved model (format: reg, unif, seq): ")
         input_option = input("Enter the option of the saved model (format: full, wo_both, wo_con, wo_qlt): ")
         # date_str = '240618'
         # input_data_type = 'unif'
         # input_option = 'full'
-        model_path = f'../model/{config.dataset}/{date_str}_best_model_{input_data_type}_{input_option}.pt'
+        model_path = f'{config.model_save_path}{date_str}_best_model_{input_method}_{input_data_type}_{input_option}.pt'
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)
             config.embedding_dim = checkpoint['embedding_dim']
             if config.method == 'CAMP':
                 model = CAMP(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'DICE':
+                model = DICE(num_users, num_items, num_cats, config).to(device)
             elif config.method == 'PD':
                 model = PD(num_users, num_items, num_cats, config).to(device)
+            elif config.method == 'MACR':
+                model = MACR(num_users, num_items, num_cats, config).to(device)
             model.load_state_dict(checkpoint['model_state_dict'])
             print(f"Loaded model from {model_path}")
         else:
             raise FileNotFoundError(f"No model found at {model_path}")
         
-        if option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
+        if config.method == 'DICE':
+                average_loss, results = test_DICE(model, test_loader, device, config.test_num_samples, k_list=[20])
+        elif option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
             inv_ratio = 1
             average_loss, results = test(config.method, model, test_loader, device, inv_ratio, k_list=[20])
             for k, metrics in results.items():
