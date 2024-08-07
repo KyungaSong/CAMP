@@ -28,7 +28,7 @@ def filter_n_core(df, n):
             break
     return df
 
-def load_meta_data(meta_file_path):
+def load_meta_data(meta_file_path, default_cat):
     meta_data = {}
     with gzip.open(meta_file_path, 'rt', encoding='utf-8') as file:
         for line_number, line in enumerate(file, start=1):
@@ -39,7 +39,7 @@ def load_meta_data(meta_file_path):
                 asin = entry.get('asin')
                 if asin:
                     categories = entry.get('categories', [])
-                    category = categories[0][1] if len(categories[0]) > 1 else (categories[0][0] if len(categories[0]) == 1 else 'Toys & Games')
+                    category = categories[0][1] if len(categories[0]) > 1 else (categories[0][0] if len(categories[0]) == 1 else f'{default_cat}')
                     meta_data[asin] = {
                         'store': entry.get('brand'),
                         'category': category  
@@ -103,7 +103,7 @@ def process_final_dataframe(df):
     return df
 
 def data_encoding(config):
-    meta_data = load_meta_data(config.raw_meta_file_path)
+    meta_data = load_meta_data(config.raw_meta_file_path, config.default_cat)
     final_df = merge_chunks(config.raw_review_file_path, meta_data)
     final_df = add_average_ratings(final_df)
     final_df = filter_n_core(final_df, 5)

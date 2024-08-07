@@ -4,6 +4,11 @@ class Config(object):
         self.batch_size = args.batch_size 
         self.lr = args.lr 
         self.dataset = args.dataset
+        self.default_cat = 'None'
+        if self.dataset == 'Toys_and_Games':
+            self.default_cat = 'Toys & Games'
+        elif self.dataset == 'Sports_and_Outdoors':
+            self.default_cat = 'Sports & Outdoors'
         self.data_preprocessed = args.data_preprocessed
         self.test_only = args.test_only
         self.num_epochs = args.num_epochs

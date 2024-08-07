@@ -1,10 +1,10 @@
 import random
-import pickle
 import logging
 import os
 import gc  
 from datetime import datetime
 import pandas as pd
+import numpy as np
 import argparse
 from tqdm import tqdm
 import itertools
@@ -23,9 +23,15 @@ from Model import PopPredict
 from training_utils import train, evaluate, test, EarlyStopping
 
 ########################################################### config
-random.seed(2024)
-torch.manual_seed(2024)
-torch.cuda.manual_seed(2024)
+def set_seed(seed=2024):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(2024)
 
 parser = argparse.ArgumentParser()
 
