@@ -211,7 +211,12 @@ class PD(nn.Module):
             self.pd_pop_dict = pickle.load(f)
         self.PD_gamma = config.PD_gamma
 
-    def forward(self, stage, batch, device):
+        self.is_testing = False
+    
+    def set_testing_mode(self, is_testing):
+        self.is_testing = is_testing
+
+    def forward(self, batch, device):
         user_ids = batch['user']
         item_ids = batch['item']
         cat_ids = batch['cat']

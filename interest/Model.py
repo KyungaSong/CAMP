@@ -222,6 +222,11 @@ class CAMP(nn.Module):
         self.reg_weight = config.reg_weight
         self.discrepancy_weight = config.discrepancy_weight
 
+        self.is_testing = False
+    
+    def set_testing_mode(self, is_testing):
+        self.is_testing = is_testing
+
     def forward(self, batch, device):
         user_ids = batch['user']
         item_ids = batch['item']

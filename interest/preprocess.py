@@ -19,7 +19,7 @@ def load_file(file_path):
 
 def load_txt(file_path, max_length=128):
     column_names = [
-        'label', 'user_encoded', 'item_encoded', 'cat_encoded', 
+        'label', 'user_encoded', 'item_encoded', 'cat_encoded', 'timestamp', 
         'conformity', 'quality', 'unit_time',
         'item_his_encoded', 'cat_his_encoded', 'con_his', 'qlt_his'
     ]
@@ -30,6 +30,7 @@ def load_txt(file_path, max_length=128):
         'user_encoded': int,
         'item_encoded': int,
         'cat_encoded': int,
+        'timestamp': int,
         'conformity': float,
         'quality': float,
         'unit_time': int,
@@ -65,7 +66,7 @@ def split_data(df, data_type, split_path):
         test_size = int(len(df) * 0.2)
         max_sample_size = test_size // df['item_encoded'].nunique()
         test_df = df.groupby('item_encoded').apply(lambda x: x.sample(n=min(len(x), max_sample_size), random_state=42)).reset_index(level=0, drop=True)
-        temp_df = df.drop(test_df.index)  # MultiIndex를 제거한 후의 인덱스를 사용
+        temp_df = df.drop(test_df.index)  
         temp_df = temp_df.reset_index(drop=True) 
         train_df, valid_df = train_test_split(temp_df, test_size=0.1, random_state=42)
     elif data_type == 'seq':
@@ -139,7 +140,7 @@ def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_te
             file = f_test
         
         # label user_encoded item_encoded cat_encoded conformity quality unit_time item_his_encoded cat_his_encoded con_his qlt_his
-        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{conformity}\t{quality}\t{row['unit_time']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
+        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{row['timestamp']}\t{conformity}\t{quality}\t{row['unit_time']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
     
     f_train.close()
     f_valid.close()
@@ -178,15 +179,13 @@ def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to
     results = []
 
     for line in tqdm(lines, desc="Generating negative samples"):
-        # positive sample 저장
         results.append(line.strip())
 
         parts = line.strip().split('\t')
         item_encoded = int(parts[2])
-        unit_time = int(parts[6])
-        item_his_encoded = set(map(int, parts[7].split(',')))
+        unit_time = int(parts[7])
+        item_his_encoded = set(map(int, parts[8].split(',')))
 
-        # negative sample 생성
         neg_samples = neg_samples_for_row(all_item_ids, item_encoded, item_his_encoded, num_samples, item_to_cat, pop_dict, unit_time)
         
         for neg_sample in neg_samples:
@@ -195,13 +194,14 @@ def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to
                 parts[1],  # user_encoded
                 str(neg_sample['item_encoded']),
                 str(neg_sample['cat_encoded']),
+                parts[4], # timestamp
                 str(neg_sample['conformity']),
                 str(neg_sample['quality']),
-                parts[6],  # unit_time
-                parts[7],  # item_his_encoded
-                parts[8],  # cat_his_encoded
-                parts[9],  # con_his
-                parts[10]   # qlt_his
+                parts[7],  # unit_time
+                parts[8],  # item_his_encoded
+                parts[9],  # cat_his_encoded
+                parts[10],  # con_his
+                parts[11]   # qlt_his
             ])
             results.append(neg_sample_line)
 
@@ -214,6 +214,25 @@ def create_pop_dict(df_pop):
         key = (row['item_encoded'], row['unit_time'])
         pop_dict[key] = {'conformity': row['conformity'], 'quality': row['quality']}
     return pop_dict
+
+def calculate_conformity(df, tau):
+    tide_con_dict = {}
+    grouped = df.groupby('item_encoded')
+    
+    for item, group in grouped:
+        ts_list = sorted(group['timestamp'])  
+        
+        for i in range(len(ts_list)):
+            ts = ts_list[i]
+            prior_ts_list = ts_list[:i]  
+            if prior_ts_list:
+                effect = np.sum(np.exp(-(ts - np.array(prior_ts_list)) / tau))
+            else:
+                effect = 0
+
+            tide_con_dict[(item, ts)] = effect
+    
+    return tide_con_dict
 
 def preprocess_df(config):
     if not os.path.exists(config.processed_path):
@@ -230,6 +249,11 @@ def preprocess_df(config):
     df = df.sort_values(by=['user_encoded', 'timestamp'])
     item_to_cat = df.set_index('item_encoded')['cat_encoded'].to_dict()
     pop_dict = create_pop_dict(df_pop)
+    if config.method == 'TIDE' and not (os.path.exists(config.tide_con_path)):
+        tide_con_dict = calculate_conformity(df, config.TIDE_tau)
+        with open(f'{config.tide_con_path}', 'wb') as f:
+            pickle.dump(tide_con_dict, f)
+            
     
     if not os.path.exists(config.split_path):
         split_data(df, config.data_type, config.split_path)
@@ -286,6 +310,7 @@ class LazyDataset(Dataset):
         user = torch.tensor(self.df['user_encoded'].iloc[idx], dtype=torch.long)
         item = torch.tensor(self.df['item_encoded'].iloc[idx], dtype=torch.long)
         cat = torch.tensor(self.df['cat_encoded'].iloc[idx], dtype=torch.long)
+        timestamp = torch.tensor(self.df['timestamp'].iloc[idx], dtype=torch.long)
         con = torch.tensor(self.df['conformity'].iloc[idx], dtype=torch.float)
         qlt = torch.tensor(self.df['quality'].iloc[idx], dtype=torch.float)
         unit_time = torch.tensor(self.df['unit_time'].iloc[idx], dtype=torch.long)
@@ -299,6 +324,7 @@ class LazyDataset(Dataset):
             'user': user,
             'item': item,
             'cat': cat,
+            'timestamp': timestamp,
             'con': con,
             'qlt': qlt,
             'unit_time': unit_time,

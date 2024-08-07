@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pickle
+import bisect
 
 class LongTermInterestModule(nn.Module):
     def __init__(self, combined_dim, embedding_dim, dropout_rate):
@@ -190,9 +192,9 @@ class BCELossModule(nn.Module):
     def forward(self, y_pred, y_true):
         return self.loss_fn(y_pred, y_true)
 
-class CAMP(nn.Module):
+class TIDE(nn.Module):
     def __init__(self, num_users, num_items, num_cats, config):
-        super(CAMP, self).__init__()
+        super(TIDE, self).__init__()
         self.config = config
         self.user_embedding = nn.Embedding(num_users, config.embedding_dim)
         self.item_embedding = nn.Embedding(num_items, config.embedding_dim, padding_idx=0)
@@ -206,6 +208,35 @@ class CAMP(nn.Module):
         self.reg_weight = config.reg_weight
         self.discrepancy_weight = config.discrepancy_weight
 
+        self.beta = nn.Parameter(torch.ones(num_items, ) * config.TIDE_beta)
+        self.tau = torch.ones(num_items, ) * config.TIDE_tau
+        self.item_quality = nn.Parameter(torch.ones(num_items, ) * config.TIDE_q)
+
+        with open(config.tide_con_path, 'rb') as f:
+            self.conformity_dict = pickle.load(f)
+
+        self.item_timestamps = {item_id: sorted([t for (_item, t) in self.conformity_dict.keys() if item_id == _item]) for item_id in range(num_items)}
+
+        self.is_testing = False
+    
+    def set_testing_mode(self, is_testing):
+        self.is_testing = is_testing
+    
+    def get_nearest_conformity(self, item_id, timestamp):
+        timestamps = self.item_timestamps[item_id]
+        pos = bisect.bisect_left(timestamps, timestamp)
+
+        if pos == 0:
+            nearest_timestamp = timestamps[0]
+        elif pos == len(timestamps):
+            nearest_timestamp = timestamps[-1]
+        else:
+            before = timestamps[pos - 1]
+            after = timestamps[pos]
+            nearest_timestamp = before if abs(timestamp - before) < abs(timestamp - after) else after
+
+        return self.conformity_dict[(item_id, nearest_timestamp)]
+
     def forward(self, batch, device):
         user_ids = batch['user']
         item_ids = batch['item']
@@ -213,6 +244,7 @@ class CAMP(nn.Module):
         items_history_padded = batch['item_his']
         cats_history_padded = batch['cat_his']
         labels = batch['label'].float()
+        timestamps = batch['timestamp']
 
         user_embeds = self.user_embedding(user_ids)
         item_embeds = self.item_embedding(item_ids)
@@ -230,7 +262,20 @@ class CAMP(nn.Module):
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
         loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
 
-        y_pred = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds)
+        batch_size = user_ids.size(0)
+        quality = F.softplus(self.item_quality[item_ids])
+        conformity = F.softplus(self.beta[item_ids]) * torch.tensor(
+            [self.get_nearest_conformity(item_ids[i].item(), timestamps[i].item()) 
+            for i in range(batch_size)], 
+            device=device
+        )
+        if self.is_testing:
+            conformity = conformity * 0.4
+        popularity = (quality + conformity).view(-1, 1)
+
+        y_pred = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds) 
+        y_pred = torch.tanh(popularity) * F.softplus(y_pred)
+        
         labels = labels.view(-1, 1)
         loss_bce = self.bce_loss_module(y_pred, labels)
 

@@ -1,5 +1,7 @@
 class Config(object):
-    def __init__(self, args):        
+    def __init__(self, args):
+        self.cuda_device = args.cuda_device
+        self.seed = args.seed   
         self.lr = args.lr
         self.num_epochs = args.num_epochs
         self.batch_size = args.batch_size 
@@ -11,6 +13,9 @@ class Config(object):
 
         self.gamma = args.gamma
         self.PD_gamma = args.PD_gamma
+        self.TIDE_beta = args.TIDE_beta
+        self.TIDE_tau = args.TIDE_tau
+        self.TIDE_q = args.TIDE_q        
         self.k = args.k
 
         self.train_num_samples = 4
@@ -30,7 +35,6 @@ class Config(object):
         self.loss_decay = args.loss_decay
         self.discrepancy_type = args.discrepancy_type
         
-
         self.wo_con = args.wo_con
         self.wo_qlt = args.wo_qlt
 
@@ -42,6 +46,7 @@ class Config(object):
         self.processed_path = f'{self.dataset_path}preprocessed/'   
         self.dice_pop_path = f'{self.processed_path}dice_pop_dict.pkl'  
         self.pd_pop_path = f'{self.processed_path}pd_pop_dict.pkl'     
+        self.tide_con_path = f'{self.processed_path}tide_con_dict.pkl'
         self.split_path = f'{self.processed_path}split_df_{self.data_type}.txt'
 
         self.pos_train_path = f'{self.processed_path}pos_train_df_{self.data_type}.txt'
@@ -55,7 +60,5 @@ class Config(object):
         self.dice_train_path = f'{self.processed_path}dice_train_df_{self.data_type}.txt'
         self.dice_valid_path = f'{self.processed_path}dice_valid_df_{self.data_type}.txt'
         self.dice_test_path = f'{self.processed_path}dice_test_df_{self.data_type}.txt'
-
-        self.cuda_device = args.cuda_device
         
         

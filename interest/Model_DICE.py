@@ -224,6 +224,11 @@ class DICE(nn.Module):
 
         self.init_params()
 
+        self.is_testing = False
+    
+    def set_testing_mode(self, is_testing):
+        self.is_testing = is_testing
+
     def adapt(self, epoch, decay):
 
         self.int_weight = self.int_weight * decay
@@ -264,7 +269,7 @@ class DICE(nn.Module):
 
         return -torch.mean(mask*torch.log(torch.sigmoid(pos_y_pred - neg_y_pred)))
 
-    def forward(self, batch, device):
+    def forward(self, batch, device):        
         user_ids = batch['user']
         pos_item = batch['pos_item']        
         pos_cat = batch['pos_cat']
@@ -310,8 +315,8 @@ class DICE(nn.Module):
         pos_y_pred_pop = self.interest_fusion_module(combined_his_embeds_pop, z_l_pop, z_s_pop, pos_item_pop, pos_cat_pop)
         neg_y_pred_pop = self.interest_fusion_module(combined_his_embeds_pop, z_l_pop, z_s_pop, neg_item_pop, neg_cat_pop)
 
-        pos_y_pred_total = pos_y_pred_int + pos_y_pred_pop
-        neg_y_pred_total = neg_y_pred_int + neg_y_pred_pop
+        pos_y_pred_total = (pos_y_pred_int + pos_y_pred_pop)/2
+        neg_y_pred_total = (neg_y_pred_int + neg_y_pred_pop)/2
 
         loss_int = self.mask_bpr_loss(pos_y_pred_int, neg_y_pred_int, mask)
         loss_pop = self.mask_bpr_loss(neg_y_pred_pop, pos_y_pred_pop, mask) + self.mask_bpr_loss(pos_y_pred_pop, neg_y_pred_pop, ~mask)

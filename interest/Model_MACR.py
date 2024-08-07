@@ -237,6 +237,11 @@ class MACR(nn.Module):
         self.user_module = UserModule(config.embedding_dim, config.hidden_dim, config.dropout_rate)
         self.item_module = ItemModule(config.embedding_dim, config.hidden_dim, config.dropout_rate)
 
+        self.is_testing = False
+    
+    def set_testing_mode(self, is_testing):
+        self.is_testing = is_testing
+
     def forward(self, batch, device):
         user_ids = batch['user']
         item_ids = batch['item']

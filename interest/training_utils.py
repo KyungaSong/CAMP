@@ -17,8 +17,6 @@ def train(model, data_loader, optimizer, device, config):
 
         if config.method == 'DICE':
             loss, _, _ = model(batch, device) 
-        elif config.method == 'PD':
-            loss, _ = model('train', batch, device)
         elif config.method == 'MACR':
             loss, _, _, _, _ = model(batch, device)
         else:
@@ -48,8 +46,6 @@ def evaluate(model, data_loader, device, config):
 
             if config.method == 'DICE':
                 loss, _, _ = model(batch, device)
-            elif config.method == 'PD':
-                loss, _ = model('eval', batch, device)
             elif config.method == 'MACR':
                 loss, _, _, _, _ = model(batch, device)
             else:
@@ -107,7 +103,9 @@ def test(model, data_loader, device, config, inv_ratio, k_list=[5, 10, 20]):
         model = nn.DataParallel(model)
 
     model.to(device)
-    model.eval()  
+    model.eval()
+    model.set_testing_mode(True)
+    
     total_loss = 0
     metrics = {k: {'precision_scores': [], 'recall_scores': [], 'ndcg_scores': [], 'hit_rates': [], 'auc_scores': [], 'mrr_scores': []} for k in k_list}
 
@@ -132,11 +130,11 @@ def test(model, data_loader, device, config, inv_ratio, k_list=[5, 10, 20]):
             if config.method == 'CAMP':
                 batch['con_his'] *= inv_ratio
                 loss, y_pred = model(batch, device)
-            if config.method == 'MACR':
+            elif config.method == 'MACR':
                 loss, y_pred, y_k, y_i, y_u = model(batch, device)
                 y_pred = y_pred - c * torch.sigmoid(y_i) * torch.sigmoid(y_u)
-            elif config.method == 'PD':
-                loss, y_pred = model('test', batch, device)
+            else:
+                loss, y_pred = model(batch, device)
 
             loss = loss.mean()
             total_loss += loss.item()
@@ -207,6 +205,7 @@ def test_DICE(model, data_loader, device, config, k_list=[5, 10, 20]):
 
     model.to(device)
     model.eval()
+    model.set_testing_mode(True)
     total_loss = 0
     metrics = {k: {'precision_scores': [], 'recall_scores': [], 'ndcg_scores': [], 'hit_rates': [], 'auc_scores': [], 'mrr_scores': []} for k in k_list}
 
@@ -223,17 +222,18 @@ def test_DICE(model, data_loader, device, config, k_list=[5, 10, 20]):
             loss = loss.mean()
             total_loss += loss.item()
 
-            pos_y_pred = pos_y_pred.view(-1, config.test_num_samples)[:, 0].unsqueeze(1)  # (batch_size, 1)
-            neg_y_pred = neg_y_pred.view(-1, config.test_num_samples)  # (batch_size, test_num_samples)
+            pos_item = batch['pos_item'][0].unsqueeze(0)
+            neg_item = batch['neg_item'].view(-1) 
+            items = torch.cat([pos_item, neg_item], dim=0) 
             
-            y_pred = torch.cat([pos_y_pred, neg_y_pred], dim=1)  # (batch_size, 1 + test_num_samples)
+            pos_y_pred = pos_y_pred[0].unsqueeze(0)             
+            y_pred = torch.cat([pos_y_pred, neg_y_pred], dim=0)
             
-            labels = torch.cat([torch.ones_like(pos_y_pred), torch.zeros_like(neg_y_pred)], dim=1)  # (batch_size, 1 + test_num_samples)
-
+            labels = torch.cat([torch.ones_like(pos_y_pred), torch.zeros_like(neg_y_pred)], dim=0)  # (batch_size, 1 + test_num_samples)
             all_predictions.extend(y_pred.cpu().numpy().reshape(-1))
             all_labels.extend(labels.cpu().numpy().reshape(-1))
             all_user_ids.extend(batch['user'].cpu().numpy().repeat(1 + config.test_num_samples))
-            all_item_ids.extend(torch.cat([batch['pos_item'].view(-1, 1), batch['neg_item'].view(-1, config.test_num_samples)], dim=1).cpu().numpy().reshape(-1))
+            all_item_ids.extend(items.cpu().numpy().reshape(-1))
 
     predictions_by_user = defaultdict(list)
     labels_by_user = defaultdict(list)

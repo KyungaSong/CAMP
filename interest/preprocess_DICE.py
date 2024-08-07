@@ -134,7 +134,7 @@ def save_pos_sample(split_path, pop_dict, pos_train_path, pos_valid_path, pos_te
             file = f_test
         
         # label user_encoded item_encoded cat_encoded conformity quality unit_time item_his_encoded cat_his_encoded con_his qlt_his
-        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{conformity}\t{quality}\t{row['unit_time']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
+        file.write(f"1\t{current_user}\t{item}\t{row['category']}\t{row['timestamp']}\t{conformity}\t{quality}\t{row['unit_time']}\t{item_history.rstrip(',')}\t{cat_history.rstrip(',')}\t{conformity_history.rstrip(',')}\t{quality_history.rstrip(',')}\n")
     
     f_train.close()
     f_valid.close()
@@ -170,7 +170,7 @@ def save_neg_samples(input_file, output_file, num_samples, all_item_ids, item_to
     for line in tqdm(lines, desc="Generating negative samples"):
         parts = line.strip().split('\t')
         pos_item_enc = int(parts[2])
-        item_his_set = set(map(int, parts[7].split(',')))
+        item_his_set = set(map(int, parts[8].split(',')))
 
         neg_samples = neg_samples_for_row(all_item_ids, pos_item_enc, item_his_set, num_samples, item_to_cat, dice_pop_dict)
         
