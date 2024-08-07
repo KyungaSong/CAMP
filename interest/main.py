@@ -14,14 +14,11 @@ from config import Config
 from preprocess import load_df, create_dataloader
 import preprocess_DICE
 from Model import CAMP
-from Model_PD import PD
-from Model_DICE import DICE
-from Model_MACR import MACR
-from Model_TIDE import TIDE
+from Model_other import DICE, PD, MACR, TIDE
 from training_utils import train, evaluate, test, test_DICE, EarlyStopping
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--cuda_device', type=int, default='3', 
+parser.add_argument('--cuda_device', type=str, default='3', 
                     help='CUDA device to use')
 parser.add_argument("--seed", type=int, default=42,
                     help="seed")
@@ -223,7 +220,7 @@ def main():
                 valid_loss = evaluate(model, valid_loader, device, config)
                 scheduler.step()
 
-                logging.info(f'Epoch {epoch+1}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
+                logging.info(f'Epoch {epoch}, Train Loss: {train_loss}, Valid Loss: {valid_loss}')
                 if valid_loss < best_loss:
                     best_loss = valid_loss
                     best_model_params = {'lr': config.lr, 'batch_size': config.batch_size, 'embedding_dim': config.embedding_dim, 'epoch': epoch}
@@ -246,7 +243,6 @@ def main():
                     average_loss, results = test(model, test_loader, device, config, inv_ratio, k_list=[20])
                     log_metrics(logging, inv_ratio, average_loss, results)
             
-            # Clear memory and cache after each run
             del model, optimizer, scheduler, early_stopping
             torch.cuda.empty_cache()
 
@@ -262,7 +258,7 @@ def main():
                 os.makedirs(os.path.dirname(config.model_save_path))
             torch.save({
                 'model_state_dict': model.state_dict(),
-                'embedding_dim': best_model_params['embedding_dim'],  # Save the best embedding dimension
+                'embedding_dim': best_model_params['embedding_dim'],  
                 'lr': best_model_params['lr'],
                 'batch_size': best_model_params['batch_size']
             }, final_save_path)
@@ -271,9 +267,6 @@ def main():
         input_method = input("Enter the method of the saved model (format: CAMP, DICE, PD, MACR, TIDE): ")
         input_data_type = input("Enter the data type of the saved model (format: reg, unif, seq): ")
         input_option = input("Enter the option of the saved model (format: full, wo_both, wo_con, wo_qlt): ")
-        # date_str = '240618'
-        # input_data_type = 'unif'
-        # input_option = 'full'
         model_path = f'{config.model_save_path}{date_str}_best_model_{input_method}_{input_data_type}_{input_option}.pt'
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path)

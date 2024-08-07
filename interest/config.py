@@ -47,18 +47,17 @@ class Config(object):
         self.dice_pop_path = f'{self.processed_path}dice_pop_dict.pkl'  
         self.pd_pop_path = f'{self.processed_path}pd_pop_dict.pkl'     
         self.tide_con_path = f'{self.processed_path}tide_con_dict.pkl'
-        self.split_path = f'{self.processed_path}split_df_{self.data_type}.txt'
-
-        self.pos_train_path = f'{self.processed_path}pos_train_df_{self.data_type}.txt'
-        self.pos_valid_path = f'{self.processed_path}pos_valid_df_{self.data_type}.txt'
-        self.pos_test_path = f'{self.processed_path}pos_test_df_{self.data_type}.txt'
         
-        self.train_path = f'{self.processed_path}train_df_{self.data_type}.txt'
-        self.valid_path = f'{self.processed_path}valid_df_{self.data_type}.txt'
-        self.test_path = f'{self.processed_path}test_df_{self.data_type}.txt'
-
-        self.dice_train_path = f'{self.processed_path}dice_train_df_{self.data_type}.txt'
-        self.dice_valid_path = f'{self.processed_path}dice_valid_df_{self.data_type}.txt'
-        self.dice_test_path = f'{self.processed_path}dice_test_df_{self.data_type}.txt'
+        self.processed_type_path = f'{self.processed_path}{self.data_type}/'
+        self.split_path = f'{self.processed_type_path}split_df.txt'
+        self.pos_train_path = f'{self.processed_type_path}pos_train_df.txt'
+        self.pos_valid_path = f'{self.processed_type_path}pos_valid_df.txt'
+        self.pos_test_path = f'{self.processed_type_path}pos_test_df.txt'        
+        self.train_path = f'{self.processed_type_path}train_df.txt'
+        self.valid_path = f'{self.processed_type_path}valid_df.txt'
+        self.test_path = f'{self.processed_type_path}test_df.txt'
+        self.dice_train_path = f'{self.processed_type_path}dice_train_df.txt'
+        self.dice_valid_path = f'{self.processed_type_path}dice_valid_df.txt'
+        self.dice_test_path = f'{self.processed_type_path}dice_test_df.txt'
         
         

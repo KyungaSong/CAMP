@@ -237,6 +237,8 @@ def calculate_conformity(df, tau):
 def preprocess_df(config):
     if not os.path.exists(config.processed_path):
         os.makedirs(config.processed_path)
+    if not os.path.exists(config.processed_type_path):
+        os.makedirs(config.processed_type_path)
 
     df = load_file(config.review_file_path)
     df_pop = load_file(config.pop_file_path)
@@ -252,8 +254,7 @@ def preprocess_df(config):
     if config.method == 'TIDE' and not (os.path.exists(config.tide_con_path)):
         tide_con_dict = calculate_conformity(df, config.TIDE_tau)
         with open(f'{config.tide_con_path}', 'wb') as f:
-            pickle.dump(tide_con_dict, f)
-            
+            pickle.dump(tide_con_dict, f)            
     
     if not os.path.exists(config.split_path):
         split_data(df, config.data_type, config.split_path)
