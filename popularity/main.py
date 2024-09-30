@@ -119,9 +119,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    lr_values = [0.001, 0.005, 0.01]  # Learning rates to try
-    batch_size_values = [32, 64]  # Batch sizes to try
-    embedding_dim_values = [64, 128]  # Embedding dimensions to try
+    lr_values = [0.0001, 0.0005]  # Learning rates to try
+    batch_size_values = [32, 64, 128]  # Batch sizes to try
+    embedding_dim_values = [32, 64, 128]  # Embedding dimensions to try
     # lr_values = [0.01]  # Learning rates to try
     # batch_size_values = [32]  # Batch sizes to try
     # embedding_dim_values = [768]  # Embedding dimensions to try

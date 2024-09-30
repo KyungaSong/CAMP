@@ -13,7 +13,7 @@ from torch.optim.lr_scheduler import StepLR
 from config import Config
 from preprocess import load_df, create_dataloader
 import preprocess_DICE
-from Model import CAMP
+from Model import CAMP, CAMP_T
 from Model_other import DICE, PD, MACR, TIDE
 from training_utils import train, evaluate, test, test_DICE, EarlyStopping
 
@@ -109,7 +109,8 @@ def create_model(config, num_users, num_items, num_cats, device):
         'DICE': DICE,
         'PD': PD,
         'MACR': MACR,
-        'TIDE': TIDE
+        'TIDE': TIDE,
+        'CAMP_T': CAMP_T
     }
 
     model_class = models.get(config.method)
@@ -234,7 +235,7 @@ def main():
             if config.method == 'DICE':
                 average_loss, results = test_DICE(model, test_loader, device, config, k_list=[20])
                 log_metrics(logging, inv_ratio, average_loss, results)
-            elif option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
+            elif not config.method in ['CAMP','CAMP_T'] or option in ['_wo_con', '_wo_both']:
                 inv_ratio = 1
                 average_loss, results = test(model, test_loader, device, config, inv_ratio, k_list=[20])
                 log_metrics(logging, inv_ratio, average_loss, results)
@@ -281,7 +282,7 @@ def main():
             average_loss, results = test_DICE(model, test_loader, device, config, k_list=[20])
             inv_ratio = 1
             log_metrics(logging, inv_ratio, average_loss, results)
-        elif option in ['_wo_con', '_wo_both'] or not config.method == 'CAMP':
+        elif not config.method in ['CAMP','CAMP_T'] or option in ['_wo_con', '_wo_both']:
             inv_ratio = 1
             average_loss, results = test(model, test_loader, device, config, inv_ratio, k_list=[20])
             log_metrics(logging, inv_ratio, average_loss, results)

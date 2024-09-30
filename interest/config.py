@@ -17,6 +17,7 @@ class Config(object):
         self.TIDE_tau = args.TIDE_tau
         self.TIDE_q = args.TIDE_q        
         self.k = args.k
+        self.inv_ratio = args.inv_ratio
 
         self.train_num_samples = 4
         self.valid_num_samples = 4

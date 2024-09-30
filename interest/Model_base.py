@@ -124,7 +124,7 @@ def bpr_loss(a, positive, negative):
     neg_score = torch.sum(a * negative, dim=1)
     return F.softplus(neg_score - pos_score)
 
-def calculate_contrastive_loss(z_l, z_s, p_l, p_s):
+def contrastive_loss(z_l, z_s, p_l, p_s):
     """
     Calculate the overall contrastive loss L_con for a user at time t
     """
@@ -134,7 +134,7 @@ def calculate_contrastive_loss(z_l, z_s, p_l, p_s):
 
     return L_con
 
-def compute_discrepancy_loss(a, b, discrepancy_weight):
+def discrepancy_loss(a, b, discrepancy_weight):
     """
     Calculate the discrepancy loss between two embeddings a and b.
     """
@@ -228,13 +228,13 @@ class CAMP(nn.Module):
 
         p_l = long_term_interest_proxy(combined_his_embeds)
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
-        loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
+        loss_con = contrastive_loss(z_l, z_s, p_l, p_s)
 
         y_pred = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds)
         labels = labels.view(-1, 1)
         loss_bce = self.bce_loss_module(y_pred, labels)
 
-        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_weight)
+        loss_discrepancy = discrepancy_loss(z_l, z_s, self.discrepancy_weight)
 
         regularization_loss = self.reg_weight * sum(torch.norm(param) for param in self.parameters())
 

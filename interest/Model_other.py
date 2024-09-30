@@ -120,7 +120,6 @@ class ShortTermInterestModule(nn.Module):
         z_s = torch.sum(a.unsqueeze(2) * combined_his_embeds, dim=1)  # (batch_size, combined_dim)
         return z_s
 
-
 def long_term_interest_proxy(combined_his_embeds):
     """
     Calculate the long-term interest proxy using combined embeddings.
@@ -156,7 +155,7 @@ def bpr_loss(a, positive, negative):
     neg_score = torch.sum(a * negative, dim=1)
     return F.softplus(neg_score - pos_score)
 
-def calculate_contrastive_loss(z_l, z_s, p_l, p_s):
+def contrastive_loss(z_l, z_s, p_l, p_s):
     """
     Calculate the overall contrastive loss L_con for a user at time t
     """
@@ -166,7 +165,7 @@ def calculate_contrastive_loss(z_l, z_s, p_l, p_s):
 
     return L_con
 
-def compute_discrepancy_loss(a, b, discrepancy_weight):
+def discrepancy_loss(a, b, discrepancy_weight):
     """
     Calculate the discrepancy loss between two embeddings a and b.
     """
@@ -413,7 +412,7 @@ class PD(nn.Module):
 
         p_l = long_term_interest_proxy(combined_his_embeds)
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
-        loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
+        loss_con = contrastive_loss(z_l, z_s, p_l, p_s)
 
         y_pred = self.interest_fusion_module(combined_his_embeds, z_l, z_s, item_embeds, cat_embeds)
         labels = labels.view(-1, 1)
@@ -424,7 +423,7 @@ class PD(nn.Module):
             y_pred = (F.elu(y_pred) + 1) * (pd_popularity ** self.PD_gamma)
 
         loss_bce = self.bce_loss_module(y_pred, labels)
-        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_weight)
+        loss_discrepancy = discrepancy_loss(z_l, z_s, self.discrepancy_weight)
         regularization_loss = self.reg_weight * sum(torch.norm(param) for param in self.parameters())
         loss = loss_con + loss_bce + loss_discrepancy + regularization_loss
         return loss, y_pred
@@ -475,7 +474,7 @@ class MACR(nn.Module):
 
         p_l = long_term_interest_proxy(combined_his_embeds)
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
-        loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
+        loss_con = contrastive_loss(z_l, z_s, p_l, p_s)
 
         y_u = self.user_module(user_embeds).squeeze(1)
         y_i = self.item_module(item_embeds).squeeze(1)
@@ -486,7 +485,7 @@ class MACR(nn.Module):
         labels = labels.view(-1, 1)
         loss_bce = self.bce_loss_module(y_pred, labels)
 
-        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_weight)
+        loss_discrepancy = discrepancy_loss(z_l, z_s, self.discrepancy_weight)
 
         regularization_loss = self.reg_weight * sum(torch.norm(param) for param in self.parameters())
 
@@ -561,7 +560,7 @@ class TIDE(nn.Module):
 
         p_l = long_term_interest_proxy(combined_his_embeds)
         p_s = short_term_interest_proxy(combined_his_embeds, self.config.gamma)
-        loss_con = calculate_contrastive_loss(z_l, z_s, p_l, p_s)
+        loss_con = contrastive_loss(z_l, z_s, p_l, p_s)
 
         batch_size = user_ids.size(0)
         quality = F.softplus(self.item_quality[item_ids])
@@ -580,7 +579,7 @@ class TIDE(nn.Module):
         labels = labels.view(-1, 1)
         loss_bce = self.bce_loss_module(y_pred, labels)
 
-        loss_discrepancy = compute_discrepancy_loss(z_l, z_s, self.discrepancy_weight)
+        loss_discrepancy = discrepancy_loss(z_l, z_s, self.discrepancy_weight)
 
         regularization_loss = self.reg_weight * sum(torch.norm(param) for param in self.parameters())
 

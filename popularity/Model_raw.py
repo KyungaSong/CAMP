@@ -34,6 +34,7 @@ class ModulePopHistory(nn.Module):
             ema_all[:, t] = (1 - alpha) * ema_all[:, t-1] + alpha * pop_history[:, t]
 
         self.ema_cache[item_id] = ema_all
+        # print("ema_all[0]:\n", ema_all[0])
         return ema_all
 
     def forward(self, pop_history, item_id, time):
@@ -41,6 +42,7 @@ class ModulePopHistory(nn.Module):
         time_before = time - 1
         time_before_clamped = torch.clamp(time_before, min=0)
         history_final = torch.gather(history_ema, 1, time_before_clamped.long().unsqueeze(1))
+        # print("history_final[0]:\n", history_final[0])
         return history_final
 
 class ModuleTime(nn.Module):
@@ -48,23 +50,36 @@ class ModuleTime(nn.Module):
         super(ModuleTime, self).__init__()
         self.config = config
         self.fc_time_value = nn.Linear(config.embedding_dim * 4, 1)
+        # self.batch_norm = nn.BatchNorm1d(config.embedding_dim * 4)
         self.relu = nn.ReLU() 
+        # self.dropout = nn.Dropout(p=0.3)
 
     def forward(self, item_embeds, time_release_embeds, time_embeds):
         temporal_gap = time_release_embeds - time_embeds
         item_temp_embed = torch.cat((temporal_gap, item_embeds, time_embeds, time_release_embeds), 1)
+        # item_temp_embed = self.batch_norm(item_temp_embed)  
+        # item_temp_embed = self.dropout(item_temp_embed)
         time_final = self.relu(self.fc_time_value(item_temp_embed))
         return time_final
 
-class ModuleQuality(nn.Module):  
-    def __init__(self, config: Config, num_items: int):
-        super(ModuleQuality, self).__init__()
+class ModuleSideInfo(nn.Module):
+    def __init__(self, config: Config):
+        super(ModuleSideInfo, self).__init__()
         self.config = config
-        self.item_quality_embedding = nn.Embedding(num_items + 1, 1, padding_idx=0)
+        self.fc_output = nn.Linear(2 * config.embedding_dim, 1)
+        nn.init.xavier_uniform_(self.fc_output.weight) 
+        nn.init.constant_(self.fc_output.bias, 0.1)
+        # self.batch_norm = nn.BatchNorm1d(2 * config.embedding_dim)
+        # self.dropout = nn.Dropout(p=0.3)
+        self.relu = nn.ReLU() 
 
-    def forward(self, item_ids):
-        quality = self.item_quality_embedding(item_ids)
-        return quality
+    def forward(self, cat_embeds, store_embeds):
+        embed_sideinfo = torch.cat((cat_embeds, store_embeds), 1)
+        # embed_sideinfo = self.batch_norm(embed_sideinfo)  
+        # embed_sideinfo = self.dropout(embed_sideinfo)
+        embed_sideinfo = self.fc_output(embed_sideinfo)
+        embed_sideinfo = self.relu(embed_sideinfo)
+        return embed_sideinfo
 
 class PopPredict(nn.Module):
     def __init__(self, config: Config, num_items, num_cats, num_stores, max_time):
@@ -82,7 +97,7 @@ class PopPredict(nn.Module):
         # Modules
         self.module_pop_history = ModulePopHistory(config=config)
         self.module_time = ModuleTime(config=config)
-        self.module_quality = ModuleQuality(config=config, num_items=num_items)
+        self.module_sideinfo = ModuleSideInfo(config=config)
 
         # Attention mechanism
         self.attention_weights = nn.Parameter(torch.ones(3, 1) / 3)
@@ -106,17 +121,26 @@ class PopPredict(nn.Module):
         item_embeds = self.item_embedding(item_ids)
         time_embeds = self.time_embedding(times)
         release_time_embeds = self.time_embedding(release_times)
+        cat_embeds = self.cat_embedding(categories)
+        store_embeds = self.store_embedding(stores)
 
         # Module outputs
         pop_history_output = self.module_pop_history(pop_histories, item_ids, times)
         time_output = self.module_time(item_embeds, release_time_embeds, time_embeds)
-        quality_output = self.module_quality(item_ids)
+        sideinfo_output = self.module_sideinfo(cat_embeds, store_embeds)
+
+        # print("weighted_sideinfo_output:", sideinfo_output)
 
         normalized_weights = F.softmax(self.attention_weights, dim=0)
 
         weighted_pop_history_output = pop_history_output * normalized_weights[0]
+        # weighted_pop_history_output = (pop_history_output - pop_history_output.mean()) / pop_history_output.std() * normalized_weights[0]
         weighted_time_output = time_output * normalized_weights[1]
-        weighted_quality_output = quality_output * normalized_weights[2]
-        output = weighted_pop_history_output + weighted_time_output + weighted_quality_output
+        weighted_sideinfo_output = sideinfo_output * normalized_weights[2]
+        output = weighted_pop_history_output + weighted_time_output + weighted_sideinfo_output
 
-        return weighted_pop_history_output, weighted_time_output, weighted_quality_output, output
+        # print("weighted_sideinfo_output:", weighted_sideinfo_output)
+
+        # if not self.is_training:
+        #     print('Attention weights:', normalized_weights.data.cpu().numpy())
+        return weighted_pop_history_output, weighted_time_output, weighted_sideinfo_output, output
